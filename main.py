@@ -1,106 +1,89 @@
 import google.generativeai as genai
-from flask import Flask, request, jsonify
+from flask import Flask,request,jsonify
 import requests
 import os
 import fitz
 
-# --- Configurações Iniciais ---
-wa_token = os.environ.get("WA_TOKEN")
+wa_token=os.environ.get("WA_TOKEN")
 genai.configure(api_key=os.environ.get("GEN_API"))
-phone_id = os.environ.get("PHONE_ID")
-phone = os.environ.get("PHONE_NUMBER")
-name = "João Victor"  # O bot considerará essa pessoa como seu proprietário ou criador
-bot_name = "Mr. Poffin"  # Este será o nome do seu bot
-model_name = "gemini-1.5-flash" # Recomendo usar o 1.5-flash para melhor análise de áudio
+phone_id=os.environ.get("PHONE_ID")
+phone=os.environ.get("PHONE_NUMBER")
+name="João Victor" #The bot will consider this person as its owner or creator
+bot_name="Mr. Poffin" #This will be the name of your bot, eg: "Hello I am Astro Bot"
+model_name="gemini-2.5-flash-preview-05-20" #Switch to "gemini-1.0-pro" or any free model, if "gemini-1.5-flash" becomes paid in future.
 
-app = Flask(__name__)
+app=Flask(__name__)
 
-# --- Configuração do Modelo Generativo ---
 generation_config = {
-    "temperature": 1,
-    "top_p": 0.95,
-    "top_k": 0,
-    "max_output_tokens": 8192,
+  "temperature": 1,
+  "top_p": 0.95,
+  "top_k": 0,
+  "max_output_tokens": 8192,
 }
 
 safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+  {"category": "HARM_CATEGORY_HARASSMENT","threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+  {"category": "HARM_CATEGORY_HATE_SPEECH","threshold": "BLOCK_MEDIUM_AND_ABOVE"},  
+  {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+  {"category": "HARM_CATEGORY_DANGEROUS_CONTENT","threshold": "BLOCK_MEDIUM_AND_ABOVE"},
 ]
 
 model = genai.GenerativeModel(model_name=model_name,
                               generation_config=generation_config,
                               safety_settings=safety_settings)
 
-# --- Início da Conversa com o Prompt de Sistema Corrigido ---
-convo = model.start_chat(history=[])
+convo = model.start_chat(history=[
+])
 
 convo.send_message(f'''
 Você é "{bot_name}", um parceiro intelectual para {name}, operando no WhatsApp. Sua principal habilidade é adaptar seu estilo de interação à necessidade de {name}.
 
 **Modos de Operação:**
 
-**1. Modo "Analista de Conteúdo"**
+**1. Modo "Analista de Conteúdo" (Sua prioridade)**
 * **Gatilho:** Quando {name} enviar um conteúdo externo para análise (um versículo bíblico, um poema, um artigo, um trecho de código, etc.).
 * **Sua Tarefa:** Explicar e dissecar o material. **Neste modo, é proibido devolver a pergunta para {name} com "o que você acha?".** Seu dever é fornecer a análise.
-  * **Para textos e imagens:** Explique o contexto, os significados, os temas principais e as possíveis interpretações. Resolva problemas explícitos.
+    * **Para textos (versículos, artigos):** Explique o contexto histórico, os significados (literal e figurado), os temas principais e as possíveis interpretações.
+    * **Para mídias (fotos, áudios):** Descreva o conteúdo objetivamente. Se houver um problema explícito (um cálculo, uma pergunta na imagem), resolva-o.
 * **Tom:** Professoral, claro e direto.
 
 **2. Modo "Sparring Partner / Debatedor"**
-* **Gatilho:** Quando {name} apresentar uma **ideia, tese ou opinião própria em texto** (ex: "Eu acho que...", "Minha teoria é...", "E se fizéssemos X?").
+* **Gatilho:** Quando {name} apresentar uma **ideia, tese ou opinião própria** (ex: "Eu acho que...", "Minha teoria é...", "E se fizéssemos X?").
 * **Sua Tarefa:** Ativar o rigor lógico para testar a ideia.
-  * Peça exemplos concretos para ideias vagas.
-  * Aponte falhas ou premissas fracas.
-  * Apresente contrapontos de forma construtiva.
-* **Tom:** Coloquial, direto e conciso.
+    * Peça exemplos concretos para ideias vagas.
+    * Aponte falhas ou premissas fracas.
+    * Apresente contrapontos de forma construtiva.
+* **Tom:** Coloquial, direto e conciso, como uma conversa entre colegas inteligentes.
 
-**3. Modo "Whisper Analítico" (Prioridade Máxima para Áudio)**
-* **Gatilho:** **Exclusivamente quando {name} enviar uma mensagem de áudio.** O sistema irá fornecer uma transcrição.
-* **Sua Tarefa:** Dividida em duas etapas:
-    1.  **Apresentar a Transcrição:** Primeiro, mostre a transcrição que você recebeu, de forma clara.
-    2.  **Análise Crítica do Conteúdo:** Com base no texto transcrito, atue como um espelho crítico da reflexão de {name}.
-        * **Aponte Pontos Cegos:** Identifique pressupostos não declarados ou ângulos que não foram considerados.
-        * **Questione a Justiça:** Se {name} descreve uma situação interpessoal, pergunte: "Você está sendo totalmente justo com a outra parte? Qual seria a perspectiva dela?".
-        * **Aprofunde as Soluções:** Se as soluções propostas parecerem rasas ou reativas, questione: "Essa solução resolve a raiz do problema ou apenas o sintoma? Quais alternativas mais simples ou óbvias podem ter sido ignoradas?".
-        * **Ofereça Novas Ideias:** Proponha ativamente outros pontos de vista ou caminhos de ação.
-* **Formato da Resposta:** Use esta estrutura:
-    `*Transcrição:*`
-    `[texto do áudio]`
+**Regra de Ouro:** Na dúvida sobre qual modo usar, assuma o **Modo 1 (Analista de Conteúdo)**. É melhor explicar algo que deveria ser debatido do que debater algo que deveria ser explicado.
 
-    `*Análise:*`
-    `[sua análise crítica]`
-* **Tom:** Empático, mas incisivo. Como um conselheiro de confiança que não tem medo de discordar.
-
-**Regra de Ouro:** A detecção do tipo de mensagem (áudio, texto, imagem) define o modo. Na dúvida entre o Modo 1 e 2 para mensagens de texto, assuma o Modo 1. O Modo 3 é exclusivo para áudio.
+**Formatação:** Lembre-se de usar a sintaxe de formatação do WhatsApp (`*negrito*`, `_itálico_`, etc.) para melhorar a clareza.
 
 Esta é sua programação base. Não responda a esta mensagem. Apenas incorpore estas regras e aguarde o primeiro comando de {name}.
 ''')
-
-# --- Funções Auxiliares ---
 def send(answer):
-    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
-    headers = {
+    url=f"https://graph.facebook.com/v18.0/{phone_id}/messages"
+    headers={
         'Authorization': f'Bearer {wa_token}',
         'Content-Type': 'application/json'
     }
-    data = {
-        "messaging_product": "whatsapp",
-        "to": f"{phone}",
-        "type": "text",
-        "text": {"body": f"{answer}"},
-    }
-    response = requests.post(url, headers=headers, json=data)
+    data={
+          "messaging_product": "whatsapp", 
+          "to": f"{phone}", 
+          "type": "text",
+          "text":{"body": f"{answer}"},
+          }
+    
+    response=requests.post(url, headers=headers,json=data)
     return response
 
 def remove(*file_paths):
-    for file_path in file_paths:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+    for file in file_paths:
+        if os.path.exists(file):
+            os.remove(file)
+        else:pass
 
-# --- Rotas da Aplicação Flask ---
-@app.route("/", methods=["GET", "POST"])
+@app.route("/",methods=["GET","POST"])
 def index():
     return "Bot"
 
@@ -114,78 +97,48 @@ def webhook():
             return challenge, 200
         else:
             return "Failed", 403
-            
     elif request.method == "POST":
         try:
             data = request.get_json()["entry"][0]["changes"][0]["value"]["messages"][0]
-            message_type = data["type"]
-
-            if message_type == "text":
+            if data["type"] == "text":
                 prompt = data["text"]["body"]
                 convo.send_message(prompt)
                 send(convo.last.text)
-
-            else: # Lida com todos os tipos de mídia
-                media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[message_type]["id"]}/'
+            else:
+                media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[data["type"]]["id"]}/'
                 headers = {'Authorization': f'Bearer {wa_token}'}
                 media_response = requests.get(media_url_endpoint, headers=headers)
                 media_url = media_response.json()["url"]
                 media_download_response = requests.get(media_url, headers=headers)
-                
-                temp_filename = None
-                
-                if message_type == "audio":
-                    temp_filename = "/tmp/temp_audio.ogg" # WhatsApp usa ogg
-                    with open(temp_filename, "wb") as temp_media:
-                        temp_media.write(media_download_response.content)
-                    
-                    file = genai.upload_file(path=temp_filename, display_name="temp_audio")
-                    
-                    # PONTO 1: Comando explícito para transcrição
-                    response = model.generate_content(["Transcreva este áudio literalmente, palavra por palavra, sem adicionar nenhuma análise ou comentário.", file])
-                    transcription = response.text
-                    
-                    # PONTO 2: Comando explícito para ativar o Modo 3
-                    convo.send_message(f"O usuário enviou um áudio. A transcrição é: '{transcription}'. Ative o 'Modo 3: Whisper Analítico' para analisar este texto e responder conforme as regras.")
-                    send(convo.last.text)
-
-                elif message_type == "image":
-                    temp_filename = "/tmp/temp_image.jpg"
-                    with open(temp_filename, "wb") as temp_media:
-                        temp_media.write(media_download_response.content)
-
-                    file = genai.upload_file(path=temp_filename, display_name="temp_image")
-                    response = model.generate_content(["Descreva esta imagem e, se houver texto, transcreva-o.", file])
-                    image_description = response.text
-                    convo.send_message(f"O usuário enviou uma imagem. A descrição é: {image_description}. Analise este conteúdo no 'Modo 1: Analista de Conteúdo'.")
-                    send(convo.last.text)
-
-                elif message_type == "document":
-                    # Este bloco de documento é complexo e pode ser otimizado
-                    # Por enquanto, mantendo uma lógica simples
-                    doc = fitz.open(stream=media_download_response.content, filetype="pdf")
-                    full_text = ""
-                    for page in doc:
-                        full_text += page.get_text() + "\n\n"
-                    
-                    convo.send_message(f"Analise o seguinte documento no 'Modo 1: Analista de Conteúdo':\n\n{full_text}")
-                    send(convo.last.text)
-
-                else:
-                    send("Este formato de mídia não é suportado pelo bot ☹")
-
-                # Limpeza de arquivos temporários e arquivos carregados
-                if temp_filename:
-                    remove(temp_filename)
-                
-                # Limpa todos os arquivos no serviço da GenAI para evitar acúmulo
-                for f in genai.list_files():
-                    f.delete()
-
-        except Exception as e:
-            # Em um ambiente de produção, seria bom logar o erro 'e'
-            pass
+                if data["type"] == "audio":
+                    filename = "/tmp/temp_audio.mp3"
+                elif data["type"] == "image":
+                    filename = "/tmp/temp_image.jpg"
+                elif data["type"] == "document":
+                    doc=fitz.open(stream=media_download_response.content,filetype="pdf")
+                    for _,page in enumerate(doc):
+                        destination="/tmp/temp_image.jpg"
+                        pix = page.get_pixmap()
+                        pix.save(destination)
+                        file = genai.upload_file(path=destination,display_name="tempfile")
+                        response = model.generate_content(["What is this",file])
+                        answer=response._result.candidates[0].content.parts[0].text
+                        convo.send_message(f"This message is created by an llm model based on the image prompt of user, reply to the user based on this: {answer}")
+                        send(convo.last.text)
+                        remove(destination)
+                else:send("This format is not Supported by the bot ☹")
+                with open(filename, "wb") as temp_media:
+                    temp_media.write(media_download_response.content)
+                file = genai.upload_file(path=filename,display_name="tempfile")
+                response = model.generate_content(["What is this",file])
+                answer=response._result.candidates[0].content.parts[0].text
+                remove("/tmp/temp_image.jpg","/tmp/temp_audio.mp3")
+                convo.send_message(f"This is an voice/image message from user transcribed by an llm model, reply to the user based on the transcription: {answer}")
+                send(convo.last.text)
+                files=genai.list_files()
+                for file in files:
+                    file.delete()
+        except :pass
         return jsonify({"status": "ok"}), 200
-
 if __name__ == "__main__":
     app.run(debug=True, port=8000)
