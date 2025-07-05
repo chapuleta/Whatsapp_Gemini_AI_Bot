@@ -3,14 +3,107 @@ from flask import Flask,request,jsonify
 import requests
 import os
 import fitz
+import csv
+import pandas as pd
+from datetime import datetime, timedelta
+import json
 #forcar vercel a mudar
 wa_token=os.environ.get("WA_TOKEN")
 genai.configure(api_key=os.environ.get("GEN_API"))
 phone_id=os.environ.get("PHONE_ID")
 phone=os.environ.get("PHONE_NUMBER")
 name="João Victor" #The bot will consider this person as its owner or creator
-bot_name="Mr. Poffin" #This will be the name of your bot, eg: "Hello I am Astro Bot"
+bot_name="Assistente Financeiro" #This will be the name of your bot, eg: "Hello I am Astro Bot"
 model_name="gemini-2.5-flash-preview-05-20" #Switch to "gemini-1.0-pro" or any free model, if "gemini-1.5-flash" becomes paid in future.
+
+# Arquivo CSV para armazenar gastos
+EXPENSES_CSV = "expenses.csv"
+INTENTIONS_CSV = "intentions.csv"
+
+# Inicializar arquivos CSV se não existirem
+def init_csv_files():
+    if not os.path.exists(EXPENSES_CSV):
+        with open(EXPENSES_CSV, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(['data', 'valor', 'nome', 'local', 'acompanhantes', 'forma_pagamento', 'categoria'])
+    
+    if not os.path.exists(INTENTIONS_CSV):
+        with open(INTENTIONS_CSV, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(['item', 'valor', 'data_criacao', 'ativo'])
+
+def save_expense(date, amount, item, location, companions, payment_method, category):
+    with open(EXPENSES_CSV, 'a', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow([date, amount, item, location, companions, payment_method, category])
+
+def save_intention(item, amount):
+    with open(INTENTIONS_CSV, 'a', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow([item, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), True])
+
+def get_expenses_summary():
+    if not os.path.exists(EXPENSES_CSV):
+        return None
+    
+    df = pd.read_csv(EXPENSES_CSV)
+    if df.empty:
+        return None
+    
+    df['data'] = pd.to_datetime(df['data'])
+    
+    # Gastos desta semana
+    this_week = df[df['data'] >= datetime.now() - timedelta(days=7)]
+    
+    # Gastos do mês atual
+    this_month = df[df['data'].dt.month == datetime.now().month]
+    
+    # Gastos por categoria
+    category_spending = df.groupby('categoria')['valor'].sum().to_dict()
+    
+    return {
+        'this_week_total': this_week['valor'].sum(),
+        'this_month_total': this_month['valor'].sum(),
+        'category_spending': category_spending,
+        'last_expenses': df.tail(5).to_dict('records')
+    }
+
+def check_spending_alerts():
+    if not os.path.exists(EXPENSES_CSV):
+        return []
+    
+    df = pd.read_csv(EXPENSES_CSV)
+    if df.empty:
+        return []
+    
+    df['data'] = pd.to_datetime(df['data'])
+    
+    alerts = []
+    
+    # Comparar gastos desta semana com semana passada
+    this_week = df[df['data'] >= datetime.now() - timedelta(days=7)]
+    last_week = df[(df['data'] >= datetime.now() - timedelta(days=14)) & 
+                   (df['data'] < datetime.now() - timedelta(days=7))]
+    
+    if not this_week.empty and not last_week.empty:
+        this_week_total = this_week['valor'].sum()
+        last_week_total = last_week['valor'].sum()
+        
+        if this_week_total > last_week_total * 1.2:  # 20% a mais
+            alerts.append(f"⚠️ Você gastou R$ {this_week_total:.2f} esta semana, {((this_week_total/last_week_total-1)*100):.1f}% a mais que a semana passada!")
+    
+    # Verificar gastos excessivos em junk food
+    junk_categories = ['lanche', 'pastel', 'hamburguer', 'refrigerante', 'coxinha', 'salgado']
+    this_week_junk = this_week[this_week['categoria'].isin(junk_categories)]
+    
+    if not this_week_junk.empty:
+        junk_total = this_week_junk['valor'].sum()
+        if junk_total > 50:  # Mais de R$ 50 em junk food
+            alerts.append(f"🍔 Você gastou R$ {junk_total:.2f} com lanches/junk food esta semana!")
+    
+    return alerts
+
+init_csv_files()
 
 app=Flask(__name__)
 
@@ -36,49 +129,57 @@ convo = model.start_chat(history=[
 ])
 
 convo.send_message(f'''
-You are "{bot_name}", Mr. Poffin. Your creator is {name}, and you're his Idea Refinement Coach, operating *exclusively in everyday English* and *entirely within WhatsApp*. Our mission is progressive, continuous, and prolonged improvement. This means you're not just a cheerleader; you're here to help {name} genuinely level up his thinking. Think of yourself as a friendly but very sharp-witted personal trainer for his brain – your job is to push him, find the weak spots, and then help him build real strength. And yes, we can still have a few laughs along the way.
+Você é "{bot_name}", um assistente financeiro inteligente do {name}. Você opera exclusivamente no WhatsApp e sua missão é ajudar {name} a ter mais consciência e controle dos seus gastos.
 
-**IMPORTANT: {name} will usually send you *audio messages*. These will be *automatically transcribed for you* before you get them as text. Your critical first step is to analyze this *provided transcription*. Your entire coaching process hinges on what's in that text.**
+**IMPORTANTES INSTRUÇÕES:**
+- {name} frequentemente enviará mensagens de áudio que serão transcritas para você
+- Você deve sempre responder em português brasileiro, de forma amigável mas direta
+- Sua função principal é registrar gastos e dar insights financeiros
 
-My Core Job: Help {name} make his ideas genuinely better, not just different.
-1.  **Challenge First, Then Coach:** When {name} shares an idea (especially from transcribed audio), your *initial* reaction should be to critically dissect it. Don't just look for what's good; actively hunt for flaws, unexamined assumptions, logical gaps, or potential downsides. Be direct about these.
-2.  **Constructive Alternatives (The "Slightly Better" Zone):** *After* you've pointed out the areas for improvement, then shift into coaching. Help {name} find *slightly better alternatives* or *actionable next steps*. We're aiming for "version 1.1" – noticeable, achievable upgrades, not overwhelming revolutions.
-3.  **Taskmaster on the Side:** If the transcribed audio mentions any practical to-dos, list them out at the end.
+**SUAS PRINCIPAIS FUNÇÕES:**
 
-Rules of Engagement (Remember, this is WhatsApp – keep it clear, concise, and use everyday English. Apply these rules to the *transcription provided to you*):
-- **Find the Flaws, Then Fix 'Em:** Your first job is to poke holes. What are the weak spots, unstated assumptions, or potential downsides of my idea? Be direct. *Then*, shift into coach mode: "Okay, now that we've seen the cracks, what's a small tweak or a different angle that could make this stronger?"
-- **Question Assumptions, Don't Just Accept:** If something sounds like an unexamined belief, call it out. "Are we sure that's true, or is that an assumption we're making?"
-- **Demand Clarity & Specificity:** If an idea is vague, push for specifics. "What would that actually look like in practice?" or "Can you give me a concrete example?"
-- **Offer Contrasting Perspectives:** "Have you considered how someone with X background might see this?" or "What's the strongest argument *against* this idea?" This helps to see the idea from new angles.
-- **Focus on Actionable "Next Steps":** Suggestions should be things {name} can actually *do* to improve the idea, not just abstract thoughts.
-- **Maintain Logical Rigor:** Gently point out any logical fallacies or inconsistencies. "Does that follow from your previous point?"
+1. **REGISTRAR GASTOS:** Quando {name} disser que gastou dinheiro, você deve:
+   - Perguntar detalhes faltantes: onde foi, com quem estava, forma de pagamento
+   - Salvar no sistema com data, valor, item, local, acompanhantes, forma de pagamento e categoria
+   - Confirmar o registro
 
-**After the Idea Coaching, The To-Do List!**
-*   If, during our idea refinement session (based on the transcribed audio), I detect any practical tasks {name} mentioned (like "wash clothes," "buy alcohol," "world domination, phase 1"), I'll create a handy to-do list at the end of my message.
-*   The list will look something like this:
-    *_Your Action Items, {name}:_*
-    *- Do the laundry (clean socks are a power move)*
-    *- Buy that specific brand of coffee*
-    *- Draft initial plans for the sentient potato alliance*
+2. **CATEGORIZAR AUTOMATICAMENTE:** Classifique gastos em categorias como:
+   - lanche, pastel, hamburguer, refrigerante, coxinha, salgado (junk food)
+   - transporte, alimentação, lazer, compras, saúde, etc.
 
-**WhatsApp Formatting (Official Syntax - Your Bible for Chatting!):**
-* Your responses will be displayed on WhatsApp. Use the exact formatting syntax for maximum clarity:
-    * For italics, place text between underscores: `_text_`.
-    * For bold, place text between asterisks: `*text*`.
-    * For strikethrough, place text between tildes: `~text~`.
-    * For inline code, place text between backticks: `` `text` ``.
-    * For a monospaced code block, place text between triple backticks: ```` ```text``` ````.
-    * For bulleted lists, start the line with `- ` or `* `.
-    * For numbered lists, start the line with the number followed by a period and space (e.g., `1. `).
-    * For a quote block, start the line with `> `.
+3. **DAR ALERTAS E INSIGHTS:**
+   - Compare gastos semanais/mensais
+   - Alerte sobre gastos excessivos com junk food
+   - Mostre padrões de consumo
 
-**Media Handling (Because WhatsApp isn't just text, darling):**
-* **Audio (Primary Input!):** You'll get a transcription. Analyze it critically, coach for improvement, and list tasks.
-* **Image/Document without caption:** Analyze the content, offer constructive insights/solutions, and look for ways to refine any underlying ideas.
-* **Image/Document with caption:** The caption is the main prompt. Respond to the text, aware of the media, focusing on critical refinement and task identification.
+4. **GERENCIAR INTENÇÕES DE COMPRA:**
+   - Registre itens que {name} quer comprar
+   - Compare gastos pequenos com objetivos maiores
+   - Lembre sobre prioridades financeiras
 
-This is your base programming. *Respond only in everyday English.* Do not reply to this setup message. Just internalize these rules and await the first command (likely an audio message, presented to you as transcribed text!) from {name}. Let the real refinement begin!
+**COMO RESPONDER A GASTOS:**
+Quando {name} disser algo como "gastei R$ 8 com um pastel", você deve responder assim:
+"Anotei o gasto de R$ 8,00 com pastel! Para completar o registro, me conta:
+- Onde você estava?
+- Com quem você estava?
+- Como você pagou? (dinheiro, cartão, pix, etc.)"
+
+**FORMATAÇÃO WHATSAPP:**
+- Use *negrito* para valores importantes
+- Use _itálico_ para categorias
+- Use listas com - para organizar informações
+- Emojis para tornar mais amigável: 💰 📊 ⚠️ 🎯
+
+**COMANDOS ESPECIAIS:**
+- "resumo" ou "relatório" = mostrar gastos recentes
+- "meta" ou "objetivo" = gerenciar intenções de compra
+- "alerta" = verificar alertas de gastos
+
+Responda apenas quando {name} enviar uma mensagem. Não responda a esta configuração inicial.
 ''')
+
+# Variável para controlar estado da conversa
+user_state = {}
 
 def send(answer):
     url=f"https://graph.facebook.com/v18.0/{phone_id}/messages"
@@ -119,8 +220,128 @@ def webhook():
     elif request.method == "POST":
         try:
             data = request.get_json()["entry"][0]["changes"][0]["value"]["messages"][0]
+            user_phone = data["from"]
+            
             if data["type"] == "text":
-                prompt = data["text"]["body"]
+                prompt = data["text"]["body"].lower()
+                
+                # Processar comandos especiais
+                if "resumo" in prompt or "relatório" in prompt:
+                    summary = get_expenses_summary()
+                    if summary:
+                        response = f"📊 *Resumo dos seus gastos:*\n\n"
+                        response += f"💰 Esta semana: R$ {summary['this_week_total']:.2f}\n"
+                        response += f"📅 Este mês: R$ {summary['this_month_total']:.2f}\n\n"
+                        response += "*Gastos por categoria:*\n"
+                        for category, amount in summary['category_spending'].items():
+                            response += f"- _{category}_: R$ {amount:.2f}\n"
+                        send(response)
+                    else:
+                        send("📊 Ainda não há gastos registrados!")
+                    return jsonify({"status": "ok"}), 200
+                
+                elif "alerta" in prompt:
+                    alerts = check_spending_alerts()
+                    if alerts:
+                        response = "⚠️ *Alertas financeiros:*\n\n"
+                        response += "\n".join(alerts)
+                        send(response)
+                    else:
+                        send("✅ Tudo sob controle! Nenhum alerta no momento.")
+                    return jsonify({"status": "ok"}), 200
+                
+                elif "meta" in prompt or "objetivo" in prompt:
+                    convo.send_message(f"O usuário quer gerenciar intenções de compra. Pergunte qual item ele quer comprar e o valor estimado para registrar como objetivo financeiro.")
+                    send(convo.last.text)
+                    return jsonify({"status": "ok"}), 200
+                
+                # Processar mensagem normal
+                # Verificar se é um gasto (contém valor monetário)
+                import re
+                money_pattern = r'(?:r\$|rs|reais?)\s*(\d+(?:,\d{2})?)'
+                money_match = re.search(money_pattern, prompt)
+                
+                if money_match:
+                    amount = float(money_match.group(1).replace(',', '.'))
+                    
+                    # Extrair item do contexto
+                    item_keywords = ['pastel', 'hamburguer', 'refrigerante', 'coxinha', 'lanche', 'comida', 'café', 'água']
+                    item_found = None
+                    for keyword in item_keywords:
+                        if keyword in prompt:
+                            item_found = keyword
+                            break
+                    
+                    if item_found:
+                        user_state[user_phone] = {
+                            'pending_expense': {
+                                'amount': amount,
+                                'item': item_found,
+                                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            }
+                        }
+                        
+                        response = f"💰 Anotei o gasto de *R$ {amount:.2f}* com _{item_found}_!\n\n"
+                        response += "Para completar o registro, me conta:\n"
+                        response += "- 📍 Onde você estava?\n"
+                        response += "- 👥 Com quem você estava?\n"
+                        response += "- 💳 Como você pagou? (dinheiro, cartão, pix, etc.)"
+                        send(response)
+                        return jsonify({"status": "ok"}), 200
+                
+                # Verificar se é resposta para gasto pendente
+                if user_phone in user_state and 'pending_expense' in user_state[user_phone]:
+                    expense = user_state[user_phone]['pending_expense']
+                    
+                    # Tentar extrair informações da resposta
+                    location = "não informado"
+                    companions = "sozinho"
+                    payment_method = "não informado"
+                    
+                    # Simples extração de informações
+                    if any(word in prompt for word in ['casa', 'trabalho', 'rua', 'shopping', 'escola', 'faculdade']):
+                        location = prompt
+                    if any(word in prompt for word in ['com', 'junto', 'amigo', 'família', 'namorad']):
+                        companions = prompt
+                    if any(word in prompt for word in ['dinheiro', 'cartão', 'pix', 'débito', 'crédito']):
+                        payment_method = prompt
+                    
+                    # Categorizar automaticamente
+                    junk_foods = ['pastel', 'hamburguer', 'refrigerante', 'coxinha', 'salgado']
+                    category = 'lanche' if expense['item'] in junk_foods else 'alimentação'
+                    
+                    # Salvar no CSV
+                    save_expense(
+                        expense['date'],
+                        expense['amount'],
+                        expense['item'],
+                        location,
+                        companions,
+                        payment_method,
+                        category
+                    )
+                    
+                    # Limpar estado
+                    del user_state[user_phone]
+                    
+                    response = f"✅ *Gasto registrado com sucesso!*\n\n"
+                    response += f"💰 Valor: R$ {expense['amount']:.2f}\n"
+                    response += f"🍽️ Item: {expense['item']}\n"
+                    response += f"📍 Local: {location}\n"
+                    response += f"👥 Companhia: {companions}\n"
+                    response += f"💳 Pagamento: {payment_method}\n"
+                    response += f"📂 Categoria: _{category}_"
+                    
+                    # Verificar alertas
+                    alerts = check_spending_alerts()
+                    if alerts:
+                        response += f"\n\n⚠️ *Alertas:*\n"
+                        response += "\n".join(alerts[:2])  # Máximo 2 alertas
+                    
+                    send(response)
+                    return jsonify({"status": "ok"}), 200
+                
+                # Mensagem normal para o bot
                 convo.send_message(prompt)
                 send(convo.last.text)
             else:
@@ -142,7 +363,7 @@ def webhook():
                         file = genai.upload_file(path=destination,display_name="tempfile")
                         response = model.generate_content(["What is this",file])
                         answer=response._result.candidates[0].content.parts[0].text
-                        convo.send_message(f"This message is created by an llm model based on the image prompt of user, reply to the user based on this: {answer}")
+                        convo.send_message(f"Esta é uma mensagem criada por um modelo de IA baseada na imagem do usuário. Responda ao usuário com base nisto, lembrando que você é um assistente financeiro: {answer}")
                         send(convo.last.text)
                         remove(destination)
                 else:send("This format is not Supported by the bot ☹")
@@ -152,7 +373,7 @@ def webhook():
                 response = model.generate_content(["What is this",file])
                 answer=response._result.candidates[0].content.parts[0].text
                 remove("/tmp/temp_image.jpg","/tmp/temp_audio.mp3")
-                convo.send_message(f"This is an voice/image message from user transcribed by an llm model, reply to the user based on the transcription: {answer}")
+                convo.send_message(f"Esta é uma mensagem de voz/imagem do usuário transcrita por um modelo de IA. Responda ao usuário com base na transcrição, lembrando que você é um assistente financeiro. Se a transcrição mencionar gastos, peça os detalhes necessários para registrar: {answer}")
                 send(convo.last.text)
                 files=genai.list_files()
                 for file in files:
