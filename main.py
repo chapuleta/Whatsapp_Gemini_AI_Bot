@@ -2,11 +2,24 @@ import google.generativeai as genai
 from flask import Flask,request,jsonify
 import requests
 import os
-import fitz
 import csv
-import pandas as pd
 from datetime import datetime, timedelta
 import json
+import re
+
+# Configuração para Vercel
+try:
+    from vercel_config import BOT_CONFIG, EXPENSE_CATEGORIES, ALERT_LIMITS
+except ImportError:
+    # Fallback se não houver arquivo de config
+    BOT_CONFIG = {'timeout': 25}
+    EXPENSE_CATEGORIES = {
+        'lanche': ['pastel', 'coxinha', 'hamburguer', 'salgado', 'lanche'],
+        'bebida': ['refrigerante', 'suco', 'água', 'café'],
+        'alimentação': ['comida', 'almoço', 'jantar', 'refeição'],
+        'outros': []
+    }
+    ALERT_LIMITS = {'weekly_increase': 0.2, 'junk_food_limit': 50}
 #forcar vercel a mudar
 wa_token=os.environ.get("WA_TOKEN")
 genai.configure(api_key=os.environ.get("GEN_API"))
@@ -16,94 +29,114 @@ name="João Victor" #The bot will consider this person as its owner or creator
 bot_name="Assistente Financeiro" #This will be the name of your bot, eg: "Hello I am Astro Bot"
 model_name="gemini-2.5-flash-preview-05-20" #Switch to "gemini-1.0-pro" or any free model, if "gemini-1.5-flash" becomes paid in future.
 
-# Arquivo CSV para armazenar gastos
-EXPENSES_CSV = "expenses.csv"
-INTENTIONS_CSV = "intentions.csv"
+# Arquivo CSV para armazenar gastos (em ambiente serverless, usar variáveis de ambiente ou banco de dados)
+EXPENSES_DATA = []  # Usar lista em memória para demo
+INTENTIONS_DATA = []  # Usar lista em memória para demo
 
-# Inicializar arquivos CSV se não existirem
-def init_csv_files():
-    if not os.path.exists(EXPENSES_CSV):
-        with open(EXPENSES_CSV, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(['data', 'valor', 'nome', 'local', 'acompanhantes', 'forma_pagamento', 'categoria'])
-    
-    if not os.path.exists(INTENTIONS_CSV):
-        with open(INTENTIONS_CSV, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(['item', 'valor', 'data_criacao', 'ativo'])
+# Função para simular CSV em ambiente serverless
+def init_data():
+    # Em produção, carregar de um banco de dados ou storage
+    pass
 
 def save_expense(date, amount, item, location, companions, payment_method, category):
-    with open(EXPENSES_CSV, 'a', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow([date, amount, item, location, companions, payment_method, category])
+    # Em produção, salvar em banco de dados
+    expense = {
+        'data': date,
+        'valor': amount,
+        'nome': item,
+        'local': location,
+        'acompanhantes': companions,
+        'forma_pagamento': payment_method,
+        'categoria': category
+    }
+    EXPENSES_DATA.append(expense)
 
 def save_intention(item, amount):
-    with open(INTENTIONS_CSV, 'a', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow([item, amount, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), True])
+    # Em produção, salvar em banco de dados
+    intention = {
+        'item': item,
+        'valor': amount,
+        'data_criacao': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'ativo': True
+    }
+    INTENTIONS_DATA.append(intention)
 
 def get_expenses_summary():
-    if not os.path.exists(EXPENSES_CSV):
+    if not EXPENSES_DATA:
         return None
     
-    df = pd.read_csv(EXPENSES_CSV)
-    if df.empty:
-        return None
+    expenses = []
+    for row in EXPENSES_DATA:
+        expense = row.copy()
+        expense['data'] = datetime.strptime(expense['data'], '%Y-%m-%d %H:%M:%S')
+        expense['valor'] = float(expense['valor'])
+        expenses.append(expense)
     
-    df['data'] = pd.to_datetime(df['data'])
+    # Filtrar gastos desta semana
+    week_ago = datetime.now() - timedelta(days=7)
+    this_week_expenses = [e for e in expenses if e['data'] >= week_ago]
     
-    # Gastos desta semana
-    this_week = df[df['data'] >= datetime.now() - timedelta(days=7)]
-    
-    # Gastos do mês atual
-    this_month = df[df['data'].dt.month == datetime.now().month]
+    # Filtrar gastos deste mês
+    current_month = datetime.now().month
+    this_month_expenses = [e for e in expenses if e['data'].month == current_month]
     
     # Gastos por categoria
-    category_spending = df.groupby('categoria')['valor'].sum().to_dict()
+    category_spending = {}
+    for expense in expenses:
+        category = expense['categoria']
+        if category in category_spending:
+            category_spending[category] += expense['valor']
+        else:
+            category_spending[category] = expense['valor']
     
     return {
-        'this_week_total': this_week['valor'].sum(),
-        'this_month_total': this_month['valor'].sum(),
+        'this_week_total': sum(e['valor'] for e in this_week_expenses),
+        'this_month_total': sum(e['valor'] for e in this_month_expenses),
         'category_spending': category_spending,
-        'last_expenses': df.tail(5).to_dict('records')
+        'last_expenses': expenses[-5:] if len(expenses) >= 5 else expenses
     }
 
 def check_spending_alerts():
-    if not os.path.exists(EXPENSES_CSV):
+    if not EXPENSES_DATA:
         return []
     
-    df = pd.read_csv(EXPENSES_CSV)
-    if df.empty:
-        return []
-    
-    df['data'] = pd.to_datetime(df['data'])
+    expenses = []
+    for row in EXPENSES_DATA:
+        expense = row.copy()
+        expense['data'] = datetime.strptime(expense['data'], '%Y-%m-%d %H:%M:%S')
+        expense['valor'] = float(expense['valor'])
+        expenses.append(expense)
     
     alerts = []
     
     # Comparar gastos desta semana com semana passada
-    this_week = df[df['data'] >= datetime.now() - timedelta(days=7)]
-    last_week = df[(df['data'] >= datetime.now() - timedelta(days=14)) & 
-                   (df['data'] < datetime.now() - timedelta(days=7))]
+    now = datetime.now()
+    week_ago = now - timedelta(days=7)
+    two_weeks_ago = now - timedelta(days=14)
     
-    if not this_week.empty and not last_week.empty:
-        this_week_total = this_week['valor'].sum()
-        last_week_total = last_week['valor'].sum()
+    this_week_expenses = [e for e in expenses if e['data'] >= week_ago]
+    last_week_expenses = [e for e in expenses if two_weeks_ago <= e['data'] < week_ago]
+    
+    if this_week_expenses and last_week_expenses:
+        this_week_total = sum(e['valor'] for e in this_week_expenses)
+        last_week_total = sum(e['valor'] for e in last_week_expenses)
         
         if this_week_total > last_week_total * 1.2:  # 20% a mais
-            alerts.append(f"⚠️ Você gastou R$ {this_week_total:.2f} esta semana, {((this_week_total/last_week_total-1)*100):.1f}% a mais que a semana passada!")
+            increase_pct = ((this_week_total/last_week_total-1)*100)
+            alerts.append(f"⚠️ Você gastou R$ {this_week_total:.2f} esta semana, {increase_pct:.1f}% a mais que a semana passada!")
     
     # Verificar gastos excessivos em junk food
     junk_categories = ['lanche', 'pastel', 'hamburguer', 'refrigerante', 'coxinha', 'salgado']
-    this_week_junk = this_week[this_week['categoria'].isin(junk_categories)]
+    this_week_junk = [e for e in this_week_expenses if e['categoria'] in junk_categories]
     
-    if not this_week_junk.empty:
-        junk_total = this_week_junk['valor'].sum()
+    if this_week_junk:
+        junk_total = sum(e['valor'] for e in this_week_junk)
         if junk_total > 50:  # Mais de R$ 50 em junk food
             alerts.append(f"🍔 Você gastou R$ {junk_total:.2f} com lanches/junk food esta semana!")
     
     return alerts
 
-init_csv_files()
+init_data()
 
 app=Flask(__name__)
 
@@ -257,7 +290,6 @@ def webhook():
                 
                 # Processar mensagem normal
                 # Verificar se é um gasto (contém valor monetário)
-                import re
                 money_pattern = r'(?:r\$|rs|reais?)\s*(\d+(?:,\d{2})?)'
                 money_match = re.search(money_pattern, prompt)
                 
@@ -345,39 +377,71 @@ def webhook():
                 convo.send_message(prompt)
                 send(convo.last.text)
             else:
+                # Processar mídia (áudio/imagem)
                 media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[data["type"]]["id"]}/'
                 headers = {'Authorization': f'Bearer {wa_token}'}
                 media_response = requests.get(media_url_endpoint, headers=headers)
                 media_url = media_response.json()["url"]
                 media_download_response = requests.get(media_url, headers=headers)
+                
                 if data["type"] == "audio":
-                    filename = "/tmp/temp_audio.mp3"
-                elif data["type"] == "image":
-                    filename = "/tmp/temp_image.jpg"
-                elif data["type"] == "document":
-                    doc=fitz.open(stream=media_download_response.content,filetype="pdf")
-                    for _,page in enumerate(doc):
-                        destination="/tmp/temp_image.jpg"
-                        pix = page.get_pixmap()
-                        pix.save(destination)
-                        file = genai.upload_file(path=destination,display_name="tempfile")
-                        response = model.generate_content(["What is this",file])
-                        answer=response._result.candidates[0].content.parts[0].text
-                        convo.send_message(f"Esta é uma mensagem criada por um modelo de IA baseada na imagem do usuário. Responda ao usuário com base nisto, lembrando que você é um assistente financeiro: {answer}")
+                    # Processar áudio - simplificado para serverless
+                    try:
+                        # Usar API do Gemini para transcrição
+                        file_bytes = media_download_response.content
+                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="audio/mpeg", display_name="audio")
+                        response = model.generate_content([
+                            "Transcreva este áudio para texto em português:",
+                            file
+                        ])
+                        answer = response.text
+                        
+                        # Processar como gasto se mencionar valores
+                        money_pattern = r'(?:r\$|rs|reais?)\s*(\d+(?:,\d{2})?)'
+                        money_match = re.search(money_pattern, answer.lower())
+                        
+                        if money_match:
+                            convo.send_message(f"Transcrição do áudio: '{answer}' - O usuário mencionou um gasto. Pergunte os detalhes necessários para registrar.")
+                        else:
+                            convo.send_message(f"Transcrição do áudio: '{answer}' - Responda como assistente financeiro.")
+                        
                         send(convo.last.text)
-                        remove(destination)
-                else:send("This format is not Supported by the bot ☹")
-                with open(filename, "wb") as temp_media:
-                    temp_media.write(media_download_response.content)
-                file = genai.upload_file(path=filename,display_name="tempfile")
-                response = model.generate_content(["What is this",file])
-                answer=response._result.candidates[0].content.parts[0].text
-                remove("/tmp/temp_image.jpg","/tmp/temp_audio.mp3")
-                convo.send_message(f"Esta é uma mensagem de voz/imagem do usuário transcrita por um modelo de IA. Responda ao usuário com base na transcrição, lembrando que você é um assistente financeiro. Se a transcrição mencionar gastos, peça os detalhes necessários para registrar: {answer}")
-                send(convo.last.text)
-                files=genai.list_files()
-                for file in files:
-                    file.delete()
+                        file.delete()
+                        
+                    except Exception as e:
+                        send("❌ Erro ao processar áudio. Tente enviar uma mensagem de texto.")
+                        
+                elif data["type"] == "image":
+                    # Processar imagem - simplificado para serverless
+                    try:
+                        file_bytes = media_download_response.content
+                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="image/jpeg", display_name="image")
+                        response = model.generate_content([
+                            "Analise esta imagem e descreva o que vê, especialmente se há informações sobre gastos, compras ou finanças:",
+                            file
+                        ])
+                        answer = response.text
+                        
+                        convo.send_message(f"Análise da imagem: '{answer}' - Responda como assistente financeiro.")
+                        send(convo.last.text)
+                        file.delete()
+                        
+                    except Exception as e:
+                        send("❌ Erro ao processar imagem. Tente enviar uma mensagem de texto.")
+                        
+                elif data["type"] == "document":
+                    send("📄 Documentos não são suportados no momento. Tente enviar uma imagem ou mensagem de texto!")
+                    
+                else:
+                    send("❌ Formato não suportado. Use texto, áudio ou imagem.")
+                    
+                # Limpeza de arquivos (importante para serverless)
+                try:
+                    files = genai.list_files()
+                    for file in files:
+                        file.delete()
+                except:
+                    pass
         except :pass
         return jsonify({"status": "ok"}), 200
 if __name__ == "__main__":
