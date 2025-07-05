@@ -1,25 +1,19 @@
 import google.generativeai as genai
-from flask import Flask,request,jsonify
+from flask import Flask, request, jsonify
 import requests
 import os
-import csv
 from datetime import datetime, timedelta
-import json
 import re
 
-# Configuração para Vercel
-try:
-    from vercel_config import BOT_CONFIG, EXPENSE_CATEGORIES, ALERT_LIMITS
-except ImportError:
-    # Fallback se não houver arquivo de config
-    BOT_CONFIG = {'timeout': 25}
-    EXPENSE_CATEGORIES = {
-        'lanche': ['pastel', 'coxinha', 'hamburguer', 'salgado', 'lanche'],
-        'bebida': ['refrigerante', 'suco', 'água', 'café'],
-        'alimentação': ['comida', 'almoço', 'jantar', 'refeição'],
-        'outros': []
-    }
-    ALERT_LIMITS = {'weekly_increase': 0.2, 'junk_food_limit': 50}
+# Configuração simples para reduzir tamanho
+BOT_CONFIG = {'timeout': 25}
+EXPENSE_CATEGORIES = {
+    'lanche': ['pastel', 'coxinha', 'hamburguer', 'salgado', 'lanche'],
+    'bebida': ['refrigerante', 'suco', 'água', 'café'],
+    'alimentação': ['comida', 'almoço', 'jantar', 'refeição'],
+    'outros': []
+}
+ALERT_LIMITS = {'weekly_increase': 0.2, 'junk_food_limit': 50}
 #forcar vercel a mudar
 wa_token=os.environ.get("WA_TOKEN")
 genai.configure(api_key=os.environ.get("GEN_API"))
@@ -377,65 +371,48 @@ def webhook():
                 convo.send_message(prompt)
                 send(convo.last.text)
             else:
-                # Processar mídia (áudio/imagem)
-                media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[data["type"]]["id"]}/'
-                headers = {'Authorization': f'Bearer {wa_token}'}
-                media_response = requests.get(media_url_endpoint, headers=headers)
-                media_url = media_response.json()["url"]
-                media_download_response = requests.get(media_url, headers=headers)
-                
-                if data["type"] == "audio":
-                    # Processar áudio - simplificado para serverless
-                    try:
-                        # Usar API do Gemini para transcrição
-                        file_bytes = media_download_response.content
-                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="audio/mpeg", display_name="audio")
-                        response = model.generate_content([
-                            "Transcreva este áudio para texto em português:",
-                            file
-                        ])
+                # Processar mídia de forma simplificada
+                try:
+                    media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[data["type"]]["id"]}/'
+                    headers = {'Authorization': f'Bearer {wa_token}'}
+                    media_response = requests.get(media_url_endpoint, headers=headers)
+                    media_url = media_response.json()["url"]
+                    media_download_response = requests.get(media_url, headers=headers)
+                    
+                    file_bytes = media_download_response.content
+                    
+                    if data["type"] == "audio":
+                        # Processar áudio
+                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="audio/mpeg")
+                        response = model.generate_content(["Transcreva este áudio para português:", file])
                         answer = response.text
                         
-                        # Processar como gasto se mencionar valores
-                        money_pattern = r'(?:r\$|rs|reais?)\s*(\d+(?:,\d{2})?)'
-                        money_match = re.search(money_pattern, answer.lower())
-                        
-                        if money_match:
-                            convo.send_message(f"Transcrição do áudio: '{answer}' - O usuário mencionou um gasto. Pergunte os detalhes necessários para registrar.")
+                        # Verificar se menciona gastos
+                        if re.search(r'(?:gastei|comprei|paguei|r\$|reais?)', answer.lower()):
+                            convo.send_message(f"Áudio transcrito: '{answer}' - Usuário mencionou gasto, peça detalhes.")
                         else:
-                            convo.send_message(f"Transcrição do áudio: '{answer}' - Responda como assistente financeiro.")
+                            convo.send_message(f"Áudio transcrito: '{answer}' - Responda como assistente financeiro.")
                         
                         send(convo.last.text)
                         file.delete()
                         
-                    except Exception as e:
-                        send("❌ Erro ao processar áudio. Tente enviar uma mensagem de texto.")
-                        
-                elif data["type"] == "image":
-                    # Processar imagem - simplificado para serverless
-                    try:
-                        file_bytes = media_download_response.content
-                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="image/jpeg", display_name="image")
-                        response = model.generate_content([
-                            "Analise esta imagem e descreva o que vê, especialmente se há informações sobre gastos, compras ou finanças:",
-                            file
-                        ])
+                    elif data["type"] == "image":
+                        # Processar imagem
+                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="image/jpeg")
+                        response = model.generate_content(["Descreva esta imagem, focando em informações financeiras:", file])
                         answer = response.text
                         
-                        convo.send_message(f"Análise da imagem: '{answer}' - Responda como assistente financeiro.")
+                        convo.send_message(f"Imagem analisada: '{answer}' - Responda como assistente financeiro.")
                         send(convo.last.text)
                         file.delete()
                         
-                    except Exception as e:
-                        send("❌ Erro ao processar imagem. Tente enviar uma mensagem de texto.")
+                    else:
+                        send("❌ Formato não suportado. Use texto, áudio ou imagem.")
                         
-                elif data["type"] == "document":
-                    send("📄 Documentos não são suportados no momento. Tente enviar uma imagem ou mensagem de texto!")
+                except Exception as e:
+                    send("❌ Erro ao processar mídia. Tente uma mensagem de texto.")
                     
-                else:
-                    send("❌ Formato não suportado. Use texto, áudio ou imagem.")
-                    
-                # Limpeza de arquivos (importante para serverless)
+                # Limpeza
                 try:
                     files = genai.list_files()
                     for file in files:

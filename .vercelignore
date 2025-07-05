@@ -52,12 +52,15 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
-# Project specific
+# Project specific (excluir arquivos que não são necessários para o deploy)
 expenses.csv
 intentions.csv
 financial_assistant.py
 config.py
+vercel_config.py
 README_FINANCEIRO.md
+vercel-functions.json
+.env.example
 images/
 *.jpg
 *.png
@@ -68,3 +71,11 @@ images/
 # Logs
 *.log
 logs/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+docs/
