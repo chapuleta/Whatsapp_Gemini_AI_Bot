@@ -423,6 +423,9 @@ def webhook():
                         response += "- 💳 Como você pagou? (dinheiro, cartão, pix, etc.)"
                         send(response)
                         return jsonify({"status": "ok"}), 200
+                    else:
+                        # Item não encontrado, enviar para o Gemini processar
+                        pass
                 
                 # Verificar se é resposta para gasto pendente
                 if pending_expense:
@@ -434,7 +437,7 @@ def webhook():
                     payment_method = "não informado"
                     
                     # Simples extração de informações
-                    if any(word in prompt for word in ['casa', 'trabalho', 'rua', 'shopping', 'escola', 'faculdade']):
+                    if any(word in prompt for word in ['casa', 'trabalho', 'rua', 'shopping', 'escola', 'faculdade', 'cantina', 'lanchonete', 'restaurante']):
                         location = prompt
                     if any(word in prompt for word in ['com', 'junto', 'amigo', 'família', 'namorad']):
                         companions = prompt
