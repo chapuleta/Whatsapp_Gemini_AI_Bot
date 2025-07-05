@@ -299,31 +299,20 @@ def webhook():
             if data["type"] == "text":
                 prompt = data["text"]["body"].lower()
                 
-                # Processar comandos especiais
-                if "resumo" in prompt or "relatório" in prompt:
+                # Processar comando de resumo/relatório (sem acento/tudo junto)
+                if any(k in prompt for k in ("resumo", "relatório", "relatorio")):
                     summary = get_expenses_summary()
                     if summary:
-                        response = f"📊 *Resumo dos seus gastos:*\n\n"
-                        response += f"� Total de gastos registrados: {summary['total_expenses']}\n"
-                        response += f"�💰 Esta semana: R$ {summary['this_week_total']:.2f}\n"
-                        response += f"📅 Este mês: R$ {summary['this_month_total']:.2f}\n\n"
-                        
-                        if summary['category_spending']:
-                            response += "*Gastos por categoria:*\n"
-                            for category, amount in summary['category_spending'].items():
-                                response += f"- _{category}_: R$ {amount:.2f}\n"
-                        
-                        if summary['last_expenses']:
-                            response += f"\n*Últimos gastos:*\n"
-                            for expense in summary['last_expenses'][-3:]:  # Últimos 3
-                                response += f"- R$ {expense['valor']:.2f} em {expense['nome']} ({expense['categoria']})\n"
-                        
-                        send(response)
+                        # Delega formatação à IA
+                        ai = model.generate_content([
+                            f"Você é um assistente financeiro. Com base neste dicionário de dados {summary}, crie um relatório amigável formatado para WhatsApp."
+                        ])
+                        response = ai.text
                     else:
-                        # Debug: verificar se há dados
-                        debug_msg = f"📊 Ainda não há gastos registrados!\n\n"
-                        debug_msg += f"🔍 Debug: {len(EXPENSES_DATA)} gastos encontrados no sistema."
-                        send(debug_msg)
+                        # Fallback debug se não há dados no DB
+                        count = len(fetch_expenses())
+                        response = f"📊 Ainda não há gastos registrados!\n\n🔍 Debug: {count} gastos encontrados no sistema."
+                    send(response)
                     return jsonify({"status": "ok"}), 200
                 
                 elif "debug" in prompt or "teste" in prompt:
