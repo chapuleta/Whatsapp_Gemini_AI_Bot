@@ -315,34 +315,8 @@ def webhook():
                     send(response)
                     return jsonify({"status": "ok"}), 200
                 
-                elif "debug" in prompt or "teste" in prompt:
-                    # Comando de debug para verificar o sistema
-                    response = f"🔍 *Debug do Sistema:*\n\n"
-                    response += f"📊 Gastos armazenados: {len(EXPENSES_DATA)}\n"
-                    response += f"🎯 Intenções armazenadas: {len(INTENTIONS_DATA)}\n"
-                    response += f"💾 Gasto pendente: {'Sim' if pending_expense else 'Não'}\n"
-                    
-                    if EXPENSES_DATA:
-                        response += f"\n*Últimos gastos:*\n"
-                        for i, expense in enumerate(EXPENSES_DATA[-3:], 1):
-                            response += f"{i}. R$ {expense['valor']} - {expense['nome']} ({expense['data']})\n"
-                    
-                    send(response)
-                    return jsonify({"status": "ok"}), 200
-                
-                elif "alerta" in prompt or "alertas" in prompt:
-                    alerts = check_spending_alerts()
-                    if alerts:
-                        response = "⚠️ *Seus alertas financeiros:*\n\n"
-                        response += "\n".join(alerts)
-                    else:
-                        response = "✅ *Nenhum alerta no momento!*\n\nSeus gastos estão sob controle."
-                    
-                    send(response)
-                    return jsonify({"status": "ok"}), 200
-                
+                # Comando para adicionar gastos de teste (SQLite)
                 elif "teste" in prompt and "gasto" in prompt:
-                    # Comando para adicionar gastos de teste
                     test_expenses = [
                         {'amount': 8.50, 'item': 'pastel', 'location': 'cantina', 'category': 'lanche'},
                         {'amount': 15.00, 'item': 'hamburguer', 'location': 'lanchonete', 'category': 'lanche'},
@@ -350,7 +324,6 @@ def webhook():
                         {'amount': 4.50, 'item': 'refrigerante', 'location': 'mercado', 'category': 'bebida'},
                         {'amount': 12.00, 'item': 'coxinha', 'location': 'padaria', 'category': 'lanche'}
                     ]
-                    
                     for expense in test_expenses:
                         save_expense(
                             datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -361,18 +334,41 @@ def webhook():
                             'dinheiro',
                             expense['category']
                         )
-                    
-                    response = f"🧪 *Gastos de teste adicionados!*\n\n"
-                    response += f"📊 Total de gastos: {len(EXPENSES_DATA)}\n"
-                    response += f"💰 Valor total: R$ {sum(e['valor'] for e in EXPENSES_DATA):.2f}\n\n"
-                    response += "Use *resumo* para ver os detalhes!"
-                    
+                    count = len(fetch_expenses())
+                    total = sum(e['valor'] for e in fetch_expenses())
+                    response = f"🧪 *Gastos de teste adicionados!*\n\n📊 Total de gastos: {count}\n💰 Valor total: R$ {total:.2f}\n\nUse *resumo* para ver os detalhes!"
                     send(response)
                     return jsonify({"status": "ok"}), 200
                 
-                elif "meta" in prompt or "objetivo" in prompt:
-                    convo.send_message(f"O usuário quer gerenciar intenções de compra. Pergunte qual item ele quer comprar e o valor estimado para registrar como objetivo financeiro.")
-                    send(convo.last.text)
+                # Debug do sistema (apenas 'debug')
+                elif "debug" in prompt:
+                     # Comando de debug para verificar o sistema
+                     response = f"🔍 *Debug do Sistema:*\n\n"
+                     count = len(fetch_expenses())
+                     cursor.execute("SELECT COUNT(*) FROM intentions")
+                     intentions_count = cursor.fetchone()[0]
+                     response += f"📊 Gastos armazenados: {count}\n"
+                     response += f"🎯 Intenções armazenadas: {intentions_count}\n"
+                     response += f"💾 Gasto pendente: {'Sim' if pending_expense else 'Não'}\n"
+                     # Mostrar últimos gastos do DB
+                     recent = fetch_expenses()[-3:]
+                     if recent:
+                         response += f"\n*Últimos gastos:*\n"
+                         for i, exp in enumerate(recent, 1):
+                             response += f"{i}. R$ {exp['valor']:.2f} - {exp['nome']} ({exp['data']})\n"
+                     
+                     send(response)
+                     return jsonify({"status": "ok"}), 200
+                
+                elif "alerta" in prompt or "alertas" in prompt:
+                    alerts = check_spending_alerts()
+                    if alerts:
+                        response = "⚠️ *Seus alertas financeiros:*\n\n"
+                        response += "\n".join(alerts)
+                    else:
+                        response = "✅ *Nenhum alerta no momento!*\n\nSeus gastos estão sob controle."
+                    
+                    send(response)
                     return jsonify({"status": "ok"}), 200
                 
                 # Processar mensagem normal
