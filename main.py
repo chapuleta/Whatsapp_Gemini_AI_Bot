@@ -4,6 +4,7 @@ import requests
 import os
 from datetime import datetime, timedelta
 import re
+import json
 
 # Configuração simples para reduzir tamanho
 BOT_CONFIG = {'timeout': 25}
@@ -23,44 +24,105 @@ name="João Victor" #The bot will consider this person as its owner or creator
 bot_name="Assistente Financeiro" #This will be the name of your bot, eg: "Hello I am Astro Bot"
 model_name="gemini-2.5-flash-preview-05-20" #Switch to "gemini-1.0-pro" or any free model, if "gemini-1.5-flash" becomes paid in future.
 
-# Arquivo CSV para armazenar gastos (em ambiente serverless, usar variáveis de ambiente ou banco de dados)
-EXPENSES_DATA = []  # Usar lista em memória para demo
-INTENTIONS_DATA = []  # Usar lista em memória para demo
+# Sistema de persistência usando arquivos temporários
+TEMP_DATA_DIR = "/tmp"
+EXPENSES_FILE = f"{TEMP_DATA_DIR}/expenses.json"
+INTENTIONS_FILE = f"{TEMP_DATA_DIR}/intentions.json"
+
+def load_expenses_data():
+    """Carrega dados de gastos do arquivo temporário"""
+    try:
+        if os.path.exists(EXPENSES_FILE):
+            with open(EXPENSES_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return []
+    except:
+        return []
+
+def save_expenses_data(data):
+    """Salva dados de gastos no arquivo temporário"""
+    try:
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+        with open(EXPENSES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"Erro ao salvar gastos: {e}")
+        return False
+
+def load_intentions_data():
+    """Carrega dados de intenções do arquivo temporário"""
+    try:
+        if os.path.exists(INTENTIONS_FILE):
+            with open(INTENTIONS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return []
+    except:
+        return []
+
+def save_intentions_data(data):
+    """Salva dados de intenções no arquivo temporário"""
+    try:
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+        with open(INTENTIONS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"Erro ao salvar intenções: {e}")
+        return False
 
 # Função para simular CSV em ambiente serverless
 def init_data():
-    # Em produção, carregar de um banco de dados ou storage
+    # Dados são carregados dinamicamente das variáveis de ambiente
     pass
 
 def save_expense(date, amount, item, location, companions, payment_method, category):
-    # Em produção, salvar em banco de dados
+    # Carregar dados existentes
+    expenses_data = load_expenses_data()
+    
+    # Adicionar novo gasto
     expense = {
         'data': date,
-        'valor': amount,
+        'valor': float(amount),
         'nome': item,
         'local': location,
         'acompanhantes': companions,
         'forma_pagamento': payment_method,
         'categoria': category
     }
-    EXPENSES_DATA.append(expense)
+    expenses_data.append(expense)
+    
+    # Salvar de volta
+    success = save_expenses_data(expenses_data)
+    
+    # Debug: mostrar resultado
+    print(f"DEBUG: Salvando gasto. Sucesso: {success}. Total de gastos: {len(expenses_data)}")
+    return success
 
 def save_intention(item, amount):
-    # Em produção, salvar em banco de dados
+    # Carregar dados existentes
+    intentions_data = load_intentions_data()
+    
+    # Adicionar nova intenção
     intention = {
         'item': item,
         'valor': amount,
         'data_criacao': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'ativo': True
     }
-    INTENTIONS_DATA.append(intention)
+    intentions_data.append(intention)
+    
+    # Salvar de volta
+    save_intentions_data(intentions_data)
 
 def get_expenses_summary():
-    if not EXPENSES_DATA:
+    expenses_data = load_expenses_data()
+    
+    if not expenses_data:
         return None
     
     expenses = []
-    for row in EXPENSES_DATA:
+    for row in expenses_data:
         expense = row.copy()
         expense['data'] = datetime.strptime(expense['data'], '%Y-%m-%d %H:%M:%S')
         expense['valor'] = float(expense['valor'])
@@ -87,15 +149,18 @@ def get_expenses_summary():
         'this_week_total': sum(e['valor'] for e in this_week_expenses),
         'this_month_total': sum(e['valor'] for e in this_month_expenses),
         'category_spending': category_spending,
-        'last_expenses': expenses[-5:] if len(expenses) >= 5 else expenses
+        'last_expenses': expenses[-5:] if len(expenses) >= 5 else expenses,
+        'total_expenses': len(expenses)
     }
 
 def check_spending_alerts():
-    if not EXPENSES_DATA:
+    expenses_data = load_expenses_data()
+    
+    if not expenses_data:
         return []
     
     expenses = []
-    for row in EXPENSES_DATA:
+    for row in expenses_data:
         expense = row.copy()
         expense['data'] = datetime.strptime(expense['data'], '%Y-%m-%d %H:%M:%S')
         expense['valor'] = float(expense['valor'])
@@ -257,29 +322,68 @@ def webhook():
                     summary = get_expenses_summary()
                     if summary:
                         response = f"📊 *Resumo dos seus gastos:*\n\n"
-                        response += f"💰 Esta semana: R$ {summary['this_week_total']:.2f}\n"
+                        response += f"� Total de gastos registrados: {summary['total_expenses']}\n"
+                        response += f"�💰 Esta semana: R$ {summary['this_week_total']:.2f}\n"
                         response += f"📅 Este mês: R$ {summary['this_month_total']:.2f}\n\n"
-                        response += "*Gastos por categoria:*\n"
-                        for category, amount in summary['category_spending'].items():
-                            response += f"- _{category}_: R$ {amount:.2f}\n"
+                        
+                        if summary['category_spending']:
+                            response += "*Gastos por categoria:*\n"
+                            for category, amount in summary['category_spending'].items():
+                                response += f"- _{category}_: R$ {amount:.2f}\n"
+                        
+                        if summary['last_expenses']:
+                            response += f"\n*Últimos gastos:*\n"
+                            for expense in summary['last_expenses'][-3:]:  # Últimos 3
+                                response += f"- R$ {expense['valor']:.2f} em {expense['nome']} ({expense['categoria']})\n"
+                        
                         send(response)
                     else:
-                        send("📊 Ainda não há gastos registrados!")
+                        # Debug: verificar se há dados
+                        expenses_data = load_expenses_data()
+                        debug_msg = f"📊 Ainda não há gastos registrados!\n\n"
+                        debug_msg += f"🔍 Debug: {len(expenses_data)} gastos encontrados no sistema."
+                        send(debug_msg)
                     return jsonify({"status": "ok"}), 200
                 
-                elif "alerta" in prompt:
-                    alerts = check_spending_alerts()
-                    if alerts:
-                        response = "⚠️ *Alertas financeiros:*\n\n"
-                        response += "\n".join(alerts)
-                        send(response)
-                    else:
-                        send("✅ Tudo sob controle! Nenhum alerta no momento.")
+                elif "debug" in prompt or "teste" in prompt:
+                    # Comando de debug para verificar o sistema
+                    expenses_data = load_expenses_data()
+                    intentions_data = load_intentions_data()
+                    
+                    response = f"🔍 *Debug do Sistema:*\n\n"
+                    response += f"📊 Gastos armazenados: {len(expenses_data)}\n"
+                    response += f"🎯 Intenções armazenadas: {len(intentions_data)}\n"
+                    response += f"💾 Estado da sessão: {len(user_state)} usuários ativos\n"
+                    
+                    if expenses_data:
+                        response += f"\n*Últimos gastos:*\n"
+                        for i, expense in enumerate(expenses_data[-3:], 1):
+                            response += f"{i}. R$ {expense['valor']} - {expense['nome']} ({expense['data']})\n"
+                    
+                    send(response)
                     return jsonify({"status": "ok"}), 200
                 
                 elif "meta" in prompt or "objetivo" in prompt:
                     convo.send_message(f"O usuário quer gerenciar intenções de compra. Pergunte qual item ele quer comprar e o valor estimado para registrar como objetivo financeiro.")
                     send(convo.last.text)
+                    return jsonify({"status": "ok"}), 200
+                
+                elif "debug" in prompt or "teste" in prompt:
+                    # Comando de debug para verificar o sistema
+                    expenses_data = load_expenses_data()
+                    intentions_data = load_intentions_data()
+                    
+                    response = f"🔍 *Debug do Sistema:*\n\n"
+                    response += f"📊 Gastos armazenados: {len(expenses_data)}\n"
+                    response += f"🎯 Intenções armazenadas: {len(intentions_data)}\n"
+                    response += f"💾 Estado da sessão: {len(user_state)} usuários ativos\n"
+                    
+                    if expenses_data:
+                        response += f"\n*Últimos gastos:*\n"
+                        for i, expense in enumerate(expenses_data[-3:], 1):
+                            response += f"{i}. R$ {expense['valor']} - {expense['nome']} ({expense['data']})\n"
+                    
+                    send(response)
                     return jsonify({"status": "ok"}), 200
                 
                 # Processar mensagem normal
@@ -336,8 +440,8 @@ def webhook():
                     junk_foods = ['pastel', 'hamburguer', 'refrigerante', 'coxinha', 'salgado']
                     category = 'lanche' if expense['item'] in junk_foods else 'alimentação'
                     
-                    # Salvar no CSV
-                    save_expense(
+                    # Salvar no sistema
+                    save_success = save_expense(
                         expense['date'],
                         expense['amount'],
                         expense['item'],
@@ -350,13 +454,22 @@ def webhook():
                     # Limpar estado
                     del user_state[user_phone]
                     
-                    response = f"✅ *Gasto registrado com sucesso!*\n\n"
+                    # Verificar se foi salvo
+                    expenses_data = load_expenses_data()
+                    total_expenses = len(expenses_data)
+                    
+                    if save_success:
+                        response = f"✅ *Gasto registrado com sucesso!*\n\n"
+                    else:
+                        response = f"⚠️ *Gasto registrado (temporário):*\n\n"
+                    
                     response += f"💰 Valor: R$ {expense['amount']:.2f}\n"
                     response += f"🍽️ Item: {expense['item']}\n"
                     response += f"📍 Local: {location}\n"
                     response += f"👥 Companhia: {companions}\n"
                     response += f"💳 Pagamento: {payment_method}\n"
-                    response += f"📂 Categoria: _{category}_"
+                    response += f"📂 Categoria: _{category}_\n"
+                    response += f"📈 Total de gastos: {total_expenses}"
                     
                     # Verificar alertas
                     alerts = check_spending_alerts()
