@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timedelta
 import re
 import json
+import tempfile
+import sqlite3
 
 # Configuração simples para reduzir tamanho
 BOT_CONFIG = {'timeout': 25}
@@ -24,13 +26,34 @@ name="João Victor" #The bot will consider this person as its owner or creator
 bot_name="Assistente Financeiro" #This will be the name of your bot, eg: "Hello I am Astro Bot"
 model_name="gemini-2.5-flash-preview-05-20" #Switch to "gemini-1.0-pro" or any free model, if "gemini-1.5-flash" becomes paid in future.
 
-# Sistema de persistência simplificado - usar variável global com backup em arquivo
-# Para um usuário único, vamos manter os dados na memória e fazer backup
-EXPENSES_DATA = []
-INTENTIONS_DATA = []
+# SQLite persistence setup
+db_path = os.path.join(tempfile.gettempdir(), 'expenses.db')
+conn = sqlite3.connect(db_path, check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS expenses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  data TEXT, valor REAL, nome TEXT,
+  local TEXT, acompanhantes TEXT,
+  forma_pagamento TEXT, categoria TEXT
+)""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS intentions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  item TEXT, valor REAL, data_criacao TEXT, ativo INTEGER
+)""")
+conn.commit()
+
+# Helper to fetch all expenses from DB
+def fetch_expenses():
+    cursor.execute("SELECT data, valor, nome, local, acompanhantes, forma_pagamento, categoria FROM expenses")
+    rows = cursor.fetchall()
+    return [
+        {'data': r[0], 'valor': r[1], 'nome': r[2], 'local': r[3], 'acompanhantes': r[4], 'forma_pagamento': r[5], 'categoria': r[6]}
+        for r in rows
+    ]
 
 # Usar um caminho que funciona tanto no Windows quanto no Vercel
-import tempfile
 BACKUP_FILE = os.path.join(tempfile.gettempdir(), 'expenses_backup.json')
 
 def load_data_from_backup():
@@ -68,56 +91,31 @@ def save_data_to_backup():
 load_data_from_backup()
 
 def save_expense(date, amount, item, location, companions, payment_method, category):
-    """Salva gasto na lista global e faz backup"""
-    global EXPENSES_DATA
-    
-    expense = {
-        'data': date,
-        'valor': float(amount),
-        'nome': item,
-        'local': location,
-        'acompanhantes': companions,
-        'forma_pagamento': payment_method,
-        'categoria': category
-    }
-    EXPENSES_DATA.append(expense)
-    
-    # Fazer backup
-    save_data_to_backup()
-    
-    print(f"DEBUG: Gasto salvo. Total: {len(EXPENSES_DATA)}")
+    cursor.execute(
+        "INSERT INTO expenses (data, valor, nome, local, acompanhantes, forma_pagamento, categoria) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (date, float(amount), item, location, companions, payment_method, category)
+    )
+    conn.commit()
+    print("DEBUG: Gasto salvo no DB.")
     return True
 
 def save_intention(item, amount):
-    """Salva intenção na lista global e faz backup"""
-    global INTENTIONS_DATA
-    
-    intention = {
-        'item': item,
-        'valor': float(amount),
-        'data_criacao': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        'ativo': True
-    }
-    INTENTIONS_DATA.append(intention)
-    
-    # Fazer backup
-    save_data_to_backup()
-    
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute(
+        "INSERT INTO intentions (item, valor, data_criacao, ativo) VALUES (?, ?, ?, ?)",
+        (item, float(amount), now, 1)
+    )
+    conn.commit()
     return True
 
 def get_expenses_summary():
-    """Retorna resumo dos gastos"""
-    global EXPENSES_DATA
-    
-    if not EXPENSES_DATA:
+    expenses_raw = fetch_expenses()
+    if not expenses_raw:
         return None
-    
     expenses = []
-    for expense_data in EXPENSES_DATA:
-        expense = expense_data.copy()
-        expense['data'] = datetime.strptime(expense['data'], '%Y-%m-%d %H:%M:%S')
-        expense['valor'] = float(expense['valor'])
-        expenses.append(expense)
+    for exp in expenses_raw:
+        exp_dt = datetime.strptime(exp['data'], '%Y-%m-%d %H:%M:%S')
+        expenses.append({**exp, 'data': exp_dt, 'valor': float(exp['valor'])})
     
     # Filtrar gastos desta semana
     week_ago = datetime.now() - timedelta(days=7)
@@ -142,18 +140,13 @@ def get_expenses_summary():
     }
 
 def check_spending_alerts():
-    """Verifica alertas de gastos"""
-    global EXPENSES_DATA
-    
-    if not EXPENSES_DATA:
+    expenses_raw = fetch_expenses()
+    if not expenses_raw:
         return []
-    
     expenses = []
-    for expense_data in EXPENSES_DATA:
-        expense = expense_data.copy()
-        expense['data'] = datetime.strptime(expense['data'], '%Y-%m-%d %H:%M:%S')
-        expense['valor'] = float(expense['valor'])
-        expenses.append(expense)
+    for exp in expenses_raw:
+        exp_dt = datetime.strptime(exp['data'], '%Y-%m-%d %H:%M:%S')
+        expenses.append({**exp, 'data': exp_dt, 'valor': float(exp['valor'])})
     
     alerts = []
     
