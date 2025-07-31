@@ -234,14 +234,34 @@ def webhook():
                         Se não houver quantidade, deixe vazio. Responda apenas com o JSON, sem explicações.
                         """
                     ])
-                    try:
-                        registro = json.loads(ai.text)
-                        save_meal(now, registro.get('tipo', ''), registro.get('alimentos', ''), registro.get('quantidade', ''))
-                        send(f"🥗 Refeição registrada: *{registro.get('tipo', '')}* - {registro.get('alimentos', '')}")
-                        return jsonify({"status": "ok"}), 200
-                    except Exception:
-                        send("❌ Não consegui interpretar sua refeição. Tente descrever de forma simples, ex: 'comi 2 ovos e 1 fatia de pão'.")
-                        return jsonify({"status": "error"}), 200
+                    import re
+                    resposta_ai = ai.text.strip()
+                    # Tenta extrair JSON da resposta
+                    match = re.search(r'\{.*\}', resposta_ai, re.DOTALL)
+                    if match:
+                        try:
+                            registro = json.loads(match.group(0))
+                            save_meal(now, registro.get('tipo', ''), registro.get('alimentos', ''), registro.get('quantidade', ''))
+                            send(f"🥗 Refeição registrada: *{registro.get('tipo', '')}* - {registro.get('alimentos', '')}")
+                            return jsonify({"status": "ok"}), 200
+                        except Exception:
+                            pass
+                    # Se não conseguiu, tenta pedir para o Gemini responder só o JSON
+                    ai2 = model.generate_content([
+                        f"Responda apenas com o JSON, sem explicações. O usuário disse: '{prompt}'. Campos: tipo, alimentos, quantidade."
+                    ])
+                    resposta_ai2 = ai2.text.strip()
+                    match2 = re.search(r'\{.*\}', resposta_ai2, re.DOTALL)
+                    if match2:
+                        try:
+                            registro = json.loads(match2.group(0))
+                            save_meal(now, registro.get('tipo', ''), registro.get('alimentos', ''), registro.get('quantidade', ''))
+                            send(f"🥗 Refeição registrada: *{registro.get('tipo', '')}* - {registro.get('alimentos', '')}")
+                            return jsonify({"status": "ok"}), 200
+                        except Exception:
+                            pass
+                    send("❌ Não consegui interpretar sua refeição. Tente descrever de forma simples, ex: 'comi 2 ovos e 1 fatia de pão'.")
+                    return jsonify({"status": "error"}), 200
 # Instrução para regras do Firebase (copie para o painel de regras):
 # {
 #   "rules": {
