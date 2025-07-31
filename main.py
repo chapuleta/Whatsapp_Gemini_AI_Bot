@@ -185,14 +185,29 @@ def webhook():
                         tipo = "ceia"
                     else:
                         tipo = "refeição"
+                    # Extrair apenas o alimento, removendo prefixos
                     alimentos = prompt
+                    alimentos = re.sub(r'^(comi|almocei|jantei|lanchei|lanche|café da manhã|ceia)\s*', '', alimentos)
+                    alimentos = alimentos.strip()
                     quantidade = ""
-                    match = re.search(r'(\d+\s*(g|ml|un|fatias|porções)?)', prompt)
+                    match = re.search(r'(\d+\s*(g|ml|un|fatias|porções)?)', alimentos)
                     if match:
                         quantidade = match.group(0)
+                        # Remove quantidade do campo alimentos
+                        alimentos = alimentos.replace(match.group(0), '').strip('. ,')
                     save_meal(now, tipo, alimentos, quantidade)
                     send(f"🥗 Refeição registrada: *{tipo}* - {alimentos}")
                     return jsonify({"status": "ok"}), 200
+# Instrução para regras do Firebase (copie para o painel de regras):
+# {
+#   "rules": {
+#     ".read": true,
+#     ".write": true,
+#     "meals": { ".indexOn": ["data"] },
+#     "exercises": { ".indexOn": ["data"] },
+#     "pantry": { ".indexOn": ["data"] }
+#   }
+# }
 
                 elif any(x in prompt for x in ["exercício", "treino", "corrida", "caminhada", "musculação", "bike", "natação"]):
                     tipo = ""
