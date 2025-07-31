@@ -160,13 +160,17 @@ def webhook():
             return "Failed", 403
     elif request.method == "POST":
         try:
-            data = request.get_json()["entry"][0]["changes"][0]["value"]["messages"][0]
+            value = request.get_json()["entry"][0]["changes"][0]["value"]
+            if "messages" not in value:
+                # Ignora eventos sem mensagens
+                return jsonify({"status": "ignored"}), 200
+            data = value["messages"][0]
             user_phone = data["from"]
             if data["type"] == "text":
                 prompt = data["text"]["body"].lower()
                 now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-                # Registrar refeição
+                # ...existing code for command handling...
                 if any(x in prompt for x in ["comi", "almocei", "jantei", "lanche", "café da manhã", "ceia"]):
                     tipo = ""
                     if "almocei" in prompt or "almoço" in prompt:
@@ -190,7 +194,6 @@ def webhook():
                     send(f"🥗 Refeição registrada: *{tipo}* - {alimentos}")
                     return jsonify({"status": "ok"}), 200
 
-                # Registrar exercício
                 elif any(x in prompt for x in ["exercício", "treino", "corrida", "caminhada", "musculação", "bike", "natação"]):
                     tipo = ""
                     for t in ["corrida", "caminhada", "musculação", "bike", "natação", "exercício", "treino"]:
@@ -205,14 +208,12 @@ def webhook():
                     send(f"🏃‍♂️ Exercício registrado: *{tipo}* {duracao}")
                     return jsonify({"status": "ok"}), 200
 
-                # Registrar alimentos disponíveis
                 elif "tenho" in prompt or "em casa" in prompt or "dispensa" in prompt:
                     alimentos = prompt
                     save_pantry(now, alimentos)
                     send(f"🍽️ Alimentos disponíveis registrados!")
                     return jsonify({"status": "ok"}), 200
 
-                # Comando de resumo
                 elif any(x in prompt for x in ["resumo", "relatório"]):
                     meals = get_meals()
                     exercises = get_exercises()
@@ -223,7 +224,6 @@ def webhook():
                     send(ai.text)
                     return jsonify({"status": "ok"}), 200
 
-                # Comando de receita
                 elif "receita" in prompt:
                     pantry = get_pantry()
                     ai = model.generate_content([
@@ -232,7 +232,6 @@ def webhook():
                     send(ai.text)
                     return jsonify({"status": "ok"}), 200
 
-                # Comando de dica
                 elif "dica" in prompt:
                     meals = get_meals()
                     exercises = get_exercises()
@@ -242,7 +241,6 @@ def webhook():
                     send(ai.text)
                     return jsonify({"status": "ok"}), 200
 
-                # Mensagem normal para o bot
                 else:
                     ai = model.generate_content([
                         f"Você é um nutricionista virtual. O usuário disse: '{prompt}'. Responda de forma útil, motivadora e personalizada. Formate para WhatsApp."
