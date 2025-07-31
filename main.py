@@ -1,3 +1,46 @@
+import os
+import requests
+# Função para buscar calorias/macros via Nutritionix
+def get_nutritionix_info(food_name, quantity="100g"):
+    app_id = os.environ.get("NUTRITIONIX_APP_ID")
+    app_key = os.environ.get("NUTRITIONIX_APP_KEY")
+    if not app_id or not app_key:
+        return None
+    url = "https://trackapi.nutritionix.com/v2/natural/nutrients"
+    headers = {
+        "x-app-id": app_id,
+        "x-app-key": app_key,
+        "Content-Type": "application/json"
+    }
+    # Monta a frase para a API
+    query = f"{quantity} de {food_name}"
+    data = {"query": query, "timezone": "America/Sao_Paulo"}
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        if response.status_code == 200:
+            res = response.json()
+            if res.get("foods"):
+                food = res["foods"][0]
+                return {
+                    "calories": food.get("nf_calories"),
+                    "protein": food.get("nf_protein"),
+                    "carbs": food.get("nf_total_carbohydrate"),
+                    "fat": food.get("nf_total_fat"),
+                    "food_name": food.get("food_name"),
+                    "serving_qty": food.get("serving_qty"),
+                    "serving_unit": food.get("serving_unit")
+                }
+        return None
+    except Exception:
+        return None
+
+# Exemplo de uso:
+# info = get_nutritionix_info("batata frita", "100g")
+# print(info)
+
+# Instrução: crie variáveis de ambiente no Vercel
+# NUTRITIONIX_APP_ID = seu App ID
+# NUTRITIONIX_APP_KEY = sua App Key
 import google.generativeai as genai
 from flask import Flask, request, jsonify
 import requests
@@ -172,32 +215,33 @@ def webhook():
 
                 # ...existing code for command handling...
                 if any(x in prompt for x in ["comi", "almocei", "jantei", "lanche", "café da manhã", "ceia"]):
-                    tipo = ""
-                    if "almocei" in prompt or "almoço" in prompt:
-                        tipo = "almoço"
-                    elif "jantei" in prompt or "jantar" in prompt:
-                        tipo = "jantar"
-                    elif "café" in prompt:
-                        tipo = "café da manhã"
-                    elif "lanche" in prompt:
-                        tipo = "lanche"
-                    elif "ceia" in prompt:
-                        tipo = "ceia"
-                    else:
-                        tipo = "refeição"
-                    # Extrair apenas o alimento, removendo prefixos
-                    alimentos = prompt
-                    alimentos = re.sub(r'^(comi|almocei|jantei|lanchei|lanche|café da manhã|ceia)\s*', '', alimentos)
-                    alimentos = alimentos.strip()
-                    quantidade = ""
-                    match = re.search(r'(\d+\s*(g|ml|un|fatias|porções)?)', alimentos)
-                    if match:
-                        quantidade = match.group(0)
-                        # Remove quantidade do campo alimentos
-                        alimentos = alimentos.replace(match.group(0), '').strip('. ,')
-                    save_meal(now, tipo, alimentos, quantidade)
-                    send(f"🥗 Refeição registrada: *{tipo}* - {alimentos}")
-                    return jsonify({"status": "ok"}), 200
+                    # Não registra se for pergunta
+                    if "?" in prompt or prompt.startswith("o que") or prompt.startswith("qual") or prompt.startswith("quando"):
+                        meals = get_meals()
+                        if meals:
+                            ultimas = meals[0]
+                            resposta = f"🍽️ Sua última refeição registrada foi: *{ultimas['tipo']}* - {ultimas['alimentos']} ({ultimas['quantidade']}) em {ultimas['data']}"
+                        else:
+                            resposta = "🍽️ Nenhuma refeição registrada ainda."
+                        send(resposta)
+                        return jsonify({"status": "ok"}), 200
+                    # Se não for pergunta, pede para o Gemini interpretar e montar o registro
+                    ai = model.generate_content([
+                        f"""
+                        Você é um nutricionista virtual. O usuário enviou: '{prompt}'.
+                        Extraia e retorne em JSON os campos:
+                        {{'tipo': <tipo de refeição>, 'alimentos': <alimentos>, 'quantidade': <quantidade>}}
+                        Se não houver quantidade, deixe vazio. Responda apenas com o JSON, sem explicações.
+                        """
+                    ])
+                    try:
+                        registro = json.loads(ai.text)
+                        save_meal(now, registro.get('tipo', ''), registro.get('alimentos', ''), registro.get('quantidade', ''))
+                        send(f"🥗 Refeição registrada: *{registro.get('tipo', '')}* - {registro.get('alimentos', '')}")
+                        return jsonify({"status": "ok"}), 200
+                    except Exception:
+                        send("❌ Não consegui interpretar sua refeição. Tente descrever de forma simples, ex: 'comi 2 ovos e 1 fatia de pão'.")
+                        return jsonify({"status": "error"}), 200
 # Instrução para regras do Firebase (copie para o painel de regras):
 # {
 #   "rules": {
