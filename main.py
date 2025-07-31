@@ -18,8 +18,9 @@ name = "João Victor"
 bot_name = "NutriBot"
 model_name = "gemini-2.5-flash-preview-05-20"
 
-# Firebase Admin SDK
-cred = credentials.Certificate(r"C:\Users\victo\Downloads\assistente-w-firebase-adminsdk-fbsvc-993ec59577.json")
+# Firebase Admin SDK via variável de ambiente
+service_account_info = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
+cred = credentials.Certificate(service_account_info)
 firebase_admin.initialize_app(cred, {
     'databaseURL': 'https://assistente-w-default-rtdb.firebaseio.com/'
 })
