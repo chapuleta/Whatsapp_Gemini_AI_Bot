@@ -5,179 +5,76 @@ import os
 from datetime import datetime, timedelta
 import re
 import json
-import tempfile
-import sqlite3
+import firebase_admin
+from firebase_admin import credentials, db
 
-# Configuração simples para reduzir tamanho
+# Configuração do bot
 BOT_CONFIG = {'timeout': 25}
-EXPENSE_CATEGORIES = {
-    'lanche': ['pastel', 'coxinha', 'hamburguer', 'salgado', 'lanche'],
-    'bebida': ['refrigerante', 'suco', 'água', 'café'],
-    'alimentação': ['comida', 'almoço', 'jantar', 'refeição'],
-    'outros': []
-}
-ALERT_LIMITS = {'weekly_increase': 0.2, 'junk_food_limit': 50}
-#forcar vercel a mudar
-wa_token=os.environ.get("WA_TOKEN")
+wa_token = os.environ.get("WA_TOKEN")
 genai.configure(api_key=os.environ.get("GEN_API"))
-phone_id=os.environ.get("PHONE_ID")
-phone=os.environ.get("PHONE_NUMBER")
-name="João Victor" #The bot will consider this person as its owner or creator
-bot_name="Assistente Financeiro" #This will be the name of your bot, eg: "Hello I am Astro Bot"
-model_name="gemini-2.5-flash-preview-05-20" #Switch to "gemini-1.0-pro" or any free model, if "gemini-1.5-flash" becomes paid in future.
+phone_id = os.environ.get("PHONE_ID")
+phone = os.environ.get("PHONE_NUMBER")
+name = "João Victor"
+bot_name = "NutriBot"
+model_name = "gemini-2.5-flash-preview-05-20"
 
-# SQLite persistence setup
-db_path = os.path.join(tempfile.gettempdir(), 'expenses.db')
-conn = sqlite3.connect(db_path, check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS expenses (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  data TEXT, valor REAL, nome TEXT,
-  local TEXT, acompanhantes TEXT,
-  forma_pagamento TEXT, categoria TEXT
-)""")
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS intentions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  item TEXT, valor REAL, data_criacao TEXT, ativo INTEGER
-)""")
-conn.commit()
+# Firebase Admin SDK
+cred = credentials.Certificate(r"C:\Users\victo\Downloads\assistente-w-firebase-adminsdk-fbsvc-993ec59577.json")
+firebase_admin.initialize_app(cred, {
+    'databaseURL': 'https://assistente-w-default-rtdb.firebaseio.com/'
+})
 
-# Helper to fetch all expenses from DB
-def fetch_expenses():
-    cursor.execute("SELECT data, valor, nome, local, acompanhantes, forma_pagamento, categoria FROM expenses")
-    rows = cursor.fetchall()
-    return [
-        {'data': r[0], 'valor': r[1], 'nome': r[2], 'local': r[3], 'acompanhantes': r[4], 'forma_pagamento': r[5], 'categoria': r[6]}
-        for r in rows
-    ]
-
-# Usar um caminho que funciona tanto no Windows quanto no Vercel
-BACKUP_FILE = os.path.join(tempfile.gettempdir(), 'expenses_backup.json')
-
-def load_data_from_backup():
-    """Carrega dados do backup se existir"""
-    global EXPENSES_DATA, INTENTIONS_DATA
-    try:
-        if os.path.exists(BACKUP_FILE):
-            with open(BACKUP_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                EXPENSES_DATA = data.get('expenses', [])
-                INTENTIONS_DATA = data.get('intentions', [])
-                print(f"DEBUG: Dados carregados do backup - {len(EXPENSES_DATA)} gastos, {len(INTENTIONS_DATA)} intenções")
-        else:
-            print("DEBUG: Nenhum backup encontrado, iniciando com dados vazios")
-    except Exception as e:
-        print(f"DEBUG: Erro ao carregar backup: {e}")
-        EXPENSES_DATA = []
-        INTENTIONS_DATA = []
-
-def save_data_to_backup():
-    """Salva dados no backup"""
-    global EXPENSES_DATA, INTENTIONS_DATA
-    try:
-        data = {
-            'expenses': EXPENSES_DATA,
-            'intentions': INTENTIONS_DATA
-        }
-        with open(BACKUP_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"DEBUG: Backup salvo - {len(EXPENSES_DATA)} gastos, {len(INTENTIONS_DATA)} intenções")
-    except Exception as e:
-        print(f"DEBUG: Erro ao salvar backup: {e}")
-
-# Carrega dados na inicialização
-load_data_from_backup()
-
-def save_expense(date, amount, item, location, companions, payment_method, category):
-    cursor.execute(
-        "INSERT INTO expenses (data, valor, nome, local, acompanhantes, forma_pagamento, categoria) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (date, float(amount), item, location, companions, payment_method, category)
-    )
-    conn.commit()
-    print("DEBUG: Gasto salvo no DB.")
+# Funções de registro usando Firebase
+def save_meal(date, tipo, alimentos, quantidade):
+    ref = db.reference('meals')
+    ref.push({
+        'data': date,
+        'tipo': tipo,
+        'alimentos': alimentos,
+        'quantidade': quantidade
+    })
     return True
 
-def save_intention(item, amount):
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute(
-        "INSERT INTO intentions (item, valor, data_criacao, ativo) VALUES (?, ?, ?, ?)",
-        (item, float(amount), now, 1)
-    )
-    conn.commit()
+def save_exercise(date, tipo, duracao):
+    ref = db.reference('exercises')
+    ref.push({
+        'data': date,
+        'tipo': tipo,
+        'duracao': duracao
+    })
     return True
 
-def get_expenses_summary():
-    expenses_raw = fetch_expenses()
-    if not expenses_raw:
-        return None
-    expenses = []
-    for exp in expenses_raw:
-        exp_dt = datetime.strptime(exp['data'], '%Y-%m-%d %H:%M:%S')
-        expenses.append({**exp, 'data': exp_dt, 'valor': float(exp['valor'])})
-    
-    # Filtrar gastos desta semana
-    week_ago = datetime.now() - timedelta(days=7)
-    this_week_expenses = [e for e in expenses if e['data'] >= week_ago]
-    
-    # Filtrar gastos deste mês
-    current_month = datetime.now().month
-    this_month_expenses = [e for e in expenses if e['data'].month == current_month]
-    
-    # Gastos por categoria
-    category_spending = {}
-    for expense in expenses:
-        category = expense['categoria']
-        category_spending[category] = category_spending.get(category, 0) + expense['valor']
-    
-    return {
-        'this_week_total': sum(e['valor'] for e in this_week_expenses),
-        'this_month_total': sum(e['valor'] for e in this_month_expenses),
-        'category_spending': category_spending,
-        'last_expenses': expenses[-5:] if len(expenses) >= 5 else expenses,
-        'total_expenses': len(expenses)
-    }
+def save_pantry(date, alimentos):
+    ref = db.reference('pantry')
+    ref.push({
+        'data': date,
+        'alimentos': alimentos
+    })
+    return True
 
-def check_spending_alerts():
-    expenses_raw = fetch_expenses()
-    if not expenses_raw:
-        return []
-    expenses = []
-    for exp in expenses_raw:
-        exp_dt = datetime.strptime(exp['data'], '%Y-%m-%d %H:%M:%S')
-        expenses.append({**exp, 'data': exp_dt, 'valor': float(exp['valor'])})
-    
-    alerts = []
-    
-    # Comparar gastos desta semana com semana passada
-    now = datetime.now()
-    week_ago = now - timedelta(days=7)
-    two_weeks_ago = now - timedelta(days=14)
-    
-    this_week_expenses = [e for e in expenses if e['data'] >= week_ago]
-    last_week_expenses = [e for e in expenses if two_weeks_ago <= e['data'] < week_ago]
-    
-    if this_week_expenses and last_week_expenses:
-        this_week_total = sum(e['valor'] for e in this_week_expenses)
-        last_week_total = sum(e['valor'] for e in last_week_expenses)
-        
-        if this_week_total > last_week_total * 1.2:
-            increase_pct = ((this_week_total/last_week_total-1)*100)
-            alerts.append(f"⚠️ Você gastou R$ {this_week_total:.2f} esta semana, {increase_pct:.1f}% a mais que a semana passada!")
-    
-    # Verificar gastos excessivos em junk food
-    junk_categories = ['lanche', 'pastel', 'hamburguer', 'refrigerante', 'coxinha', 'salgado']
-    this_week_junk = [e for e in this_week_expenses if e['categoria'] in junk_categories]
-    
-    if this_week_junk:
-        junk_total = sum(e['valor'] for e in this_week_junk)
-        if junk_total > 50:
-            alerts.append(f"🍔 Você gastou R$ {junk_total:.2f} com lanches/junk food esta semana!")
-    
-    return alerts
+def get_meals():
+    ref = db.reference('meals')
+    meals = ref.order_by_child('data').limit_to_last(10).get()
+    # Retorna lista ordenada do mais recente para o mais antigo
+    if meals:
+        return list(reversed([v for v in meals.values()]))
+    return []
 
-app=Flask(__name__)
+def get_exercises():
+    ref = db.reference('exercises')
+    exercises = ref.order_by_child('data').limit_to_last(10).get()
+    if exercises:
+        return list(reversed([v for v in exercises.values()]))
+    return []
+
+def get_pantry():
+    ref = db.reference('pantry')
+    pantry = ref.order_by_child('data').limit_to_last(1).get()
+    if pantry:
+        return list(pantry.values())[0]['alimentos']
+    return ""
+
+app = Flask(__name__)
 
 generation_config = {
   "temperature": 1,
@@ -201,88 +98,57 @@ convo = model.start_chat(history=[
 ])
 
 convo.send_message(f'''
-Você é "{bot_name}", um assistente financeiro inteligente do {name}. Você opera exclusivamente no WhatsApp e sua missão é ajudar {name} a ter mais consciência e controle dos seus gastos.
+Você é "{bot_name}", um nutricionista virtual inteligente do {name}. Você opera exclusivamente no WhatsApp e sua missão é ajudar {name} a ter uma alimentação mais saudável, equilibrada e personalizada.
 
-**IMPORTANTES INSTRUÇÕES:**
-- {name} frequentemente enviará mensagens de áudio que serão transcritas para você
-- Você deve sempre responder em português brasileiro, de forma amigável mas direta
-- Sua função principal é registrar gastos e dar insights financeiros
+**INSTRUÇÕES IMPORTANTES:**
+- {name} pode enviar mensagens dizendo o que comeu, quanto, se fez ou vai fazer exercício, e o que tem de comida em casa.
+- Sempre responda em português brasileiro, de forma amigável, motivadora e sem julgamentos.
+- Sua função principal é registrar refeições, sugerir cardápios, receitas e orientar sobre hábitos saudáveis.
 
 **SUAS PRINCIPAIS FUNÇÕES:**
-
-1. **REGISTRAR GASTOS:** Quando {name} disser que gastou dinheiro, você deve:
-   - Perguntar detalhes faltantes: onde foi, com quem estava, forma de pagamento
-   - Salvar no sistema com data, valor, item, local, acompanhantes, forma de pagamento e categoria
-   - Confirmar o registro
-
-2. **CATEGORIZAR AUTOMATICAMENTE:** Classifique gastos em categorias como:
-   - lanche, pastel, hamburguer, refrigerante, coxinha, salgado (junk food)
-   - transporte, alimentação, lazer, compras, saúde, etc.
-
-3. **DAR ALERTAS E INSIGHTS:**
-   - Compare gastos semanais/mensais
-   - Alerte sobre gastos excessivos com junk food
-   - Mostre padrões de consumo
-
-4. **GERENCIAR INTENÇÕES DE COMPRA:**
-   - Registre itens que {name} quer comprar
-   - Compare gastos pequenos com objetivos maiores
-   - Lembre sobre prioridades financeiras
-
-**COMO RESPONDER A GASTOS:**
-Quando {name} disser algo como "gastei R$ 8 com um pastel", você deve responder assim:
-"Anotei o gasto de R$ 8,00 com pastel! Para completar o registro, me conta:
-- Onde você estava?
-- Com quem você estava?
-- Como você pagou? (dinheiro, cartão, pix, etc.)"
-
-**FORMATAÇÃO WHATSAPP:**
-- Use *negrito* para valores importantes
-- Use _itálico_ para categorias
-- Use listas com - para organizar informações
-- Emojis para tornar mais amigável: 💰 📊 ⚠️ 🎯
+1. Registrar refeições e exercícios.
+2. Sugerir o que comer nas próximas refeições, considerando histórico, preferências, alimentos disponíveis e rotina de exercícios.
+3. Sugerir receitas saudáveis e práticas com os ingredientes disponíveis.
+4. Dar dicas de nutrição, hidratação, horários ideais para comer e praticar exercícios.
+5. Mostrar resumo alimentar e de exercícios ao pedir "resumo" ou "relatório".
 
 **COMANDOS ESPECIAIS:**
-- "resumo" ou "relatório" = mostrar gastos recentes
-- "meta" ou "objetivo" = gerenciar intenções de compra
-- "alerta" = verificar alertas de gastos
+- "resumo" ou "relatório" = mostrar resumo alimentar e de exercícios
+- "receita" = sugerir receitas com ingredientes disponíveis
+- "dica" = dar dicas de nutrição ou exercício
+
+**FORMATAÇÃO WHATSAPP:**
+- Use *negrito* para alimentos, horários e dicas importantes
+- Use _itálico_ para tipos de refeição ou exercício
+- Use listas com - para organizar informações
+- Emojis para tornar mais amigável: 🥗 🍎 🏃‍♂️ 💡 🍽️
 
 Responda apenas quando {name} enviar uma mensagem. Não responda a esta configuração inicial.
 ''')
 
-# Variável para controlar estado da conversa - usuário único
-pending_expense = None
+# Função para enviar mensagem WhatsApp
 
 def send(answer):
-    url=f"https://graph.facebook.com/v18.0/{phone_id}/messages"
-    headers={
+    url = f"https://graph.facebook.com/v18.0/{phone_id}/messages"
+    headers = {
         'Authorization': f'Bearer {wa_token}',
         'Content-Type': 'application/json'
     }
-    data={
-          "messaging_product": "whatsapp", 
-          "to": f"{phone}", 
-          "type": "text",
-          "text":{"body": f"{answer}"},
-          }
-    
-    response=requests.post(url, headers=headers,json=data)
+    data = {
+        "messaging_product": "whatsapp",
+        "to": f"{phone}",
+        "type": "text",
+        "text": {"body": f"{answer}"},
+    }
+    response = requests.post(url, headers=headers, json=data)
     return response
 
-def remove(*file_paths):
-    for file in file_paths:
-        if os.path.exists(file):
-            os.remove(file)
-        else:pass
-
-@app.route("/",methods=["GET","POST"])
+@app.route("/", methods=["GET", "POST"])
 def index():
-    return "Bot"
+    return "NutriBot"
 
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
-    global pending_expense
-    
     if request.method == "GET":
         mode = request.args.get("hub.mode")
         token = request.args.get("hub.verify_token")
@@ -295,229 +161,98 @@ def webhook():
         try:
             data = request.get_json()["entry"][0]["changes"][0]["value"]["messages"][0]
             user_phone = data["from"]
-            
             if data["type"] == "text":
                 prompt = data["text"]["body"].lower()
-                
-                # Processar comando de resumo/relatório (sem acento/tudo junto)
-                if any(k in prompt for k in ("resumo", "relatório", "relatorio")):
-                    summary = get_expenses_summary()
-                    if summary:
-                        # Delega formatação à IA
-                        ai = model.generate_content([
-                            f"Você é um assistente financeiro. Com base neste dicionário de dados {summary}, crie um relatório amigável formatado para WhatsApp."
-                        ])
-                        response = ai.text
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                # Registrar refeição
+                if any(x in prompt for x in ["comi", "almocei", "jantei", "lanche", "café da manhã", "ceia"]):
+                    tipo = ""
+                    if "almocei" in prompt or "almoço" in prompt:
+                        tipo = "almoço"
+                    elif "jantei" in prompt or "jantar" in prompt:
+                        tipo = "jantar"
+                    elif "café" in prompt:
+                        tipo = "café da manhã"
+                    elif "lanche" in prompt:
+                        tipo = "lanche"
+                    elif "ceia" in prompt:
+                        tipo = "ceia"
                     else:
-                        # Fallback debug se não há dados no DB
-                        count = len(fetch_expenses())
-                        response = f"📊 Ainda não há gastos registrados!\n\n🔍 Debug: {count} gastos encontrados no sistema."
-                    send(response)
+                        tipo = "refeição"
+                    alimentos = prompt
+                    quantidade = ""
+                    match = re.search(r'(\d+\s*(g|ml|un|fatias|porções)?)', prompt)
+                    if match:
+                        quantidade = match.group(0)
+                    save_meal(now, tipo, alimentos, quantidade)
+                    send(f"🥗 Refeição registrada: *{tipo}* - {alimentos}")
                     return jsonify({"status": "ok"}), 200
-                
-                # Comando para adicionar gastos de teste (SQLite)
-                elif "teste" in prompt and "gasto" in prompt:
-                    test_expenses = [
-                        {'amount': 8.50, 'item': 'pastel', 'location': 'cantina', 'category': 'lanche'},
-                        {'amount': 15.00, 'item': 'hamburguer', 'location': 'lanchonete', 'category': 'lanche'},
-                        {'amount': 25.00, 'item': 'almoço', 'location': 'restaurante', 'category': 'alimentação'},
-                        {'amount': 4.50, 'item': 'refrigerante', 'location': 'mercado', 'category': 'bebida'},
-                        {'amount': 12.00, 'item': 'coxinha', 'location': 'padaria', 'category': 'lanche'}
-                    ]
-                    for expense in test_expenses:
-                        save_expense(
-                            datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            expense['amount'],
-                            expense['item'],
-                            expense['location'],
-                            'sozinho',
-                            'dinheiro',
-                            expense['category']
-                        )
-                    count = len(fetch_expenses())
-                    total = sum(e['valor'] for e in fetch_expenses())
-                    response = f"🧪 *Gastos de teste adicionados!*\n\n📊 Total de gastos: {count}\n💰 Valor total: R$ {total:.2f}\n\nUse *resumo* para ver os detalhes!"
-                    send(response)
-                    return jsonify({"status": "ok"}), 200
-                
-                # Debug do sistema (apenas 'debug')
-                elif "debug" in prompt:
-                     # Comando de debug para verificar o sistema
-                     response = f"🔍 *Debug do Sistema:*\n\n"
-                     count = len(fetch_expenses())
-                     cursor.execute("SELECT COUNT(*) FROM intentions")
-                     intentions_count = cursor.fetchone()[0]
-                     response += f"📊 Gastos armazenados: {count}\n"
-                     response += f"🎯 Intenções armazenadas: {intentions_count}\n"
-                     response += f"💾 Gasto pendente: {'Sim' if pending_expense else 'Não'}\n"
-                     # Mostrar últimos gastos do DB
-                     recent = fetch_expenses()[-3:]
-                     if recent:
-                         response += f"\n*Últimos gastos:*\n"
-                         for i, exp in enumerate(recent, 1):
-                             response += f"{i}. R$ {exp['valor']:.2f} - {exp['nome']} ({exp['data']})\n"
-                     
-                     send(response)
-                     return jsonify({"status": "ok"}), 200
-                
-                elif "alerta" in prompt or "alertas" in prompt:
-                    alerts = check_spending_alerts()
-                    if alerts:
-                        response = "⚠️ *Seus alertas financeiros:*\n\n"
-                        response += "\n".join(alerts)
-                    else:
-                        response = "✅ *Nenhum alerta no momento!*\n\nSeus gastos estão sob controle."
-                    
-                    send(response)
-                    return jsonify({"status": "ok"}), 200
-                
-                # Processar mensagem normal
-                # Verificar se é um gasto (contém valor monetário)
-                money_pattern = r'(?:r\$|rs|reais?)\s*(\d+(?:,\d{2})?)'
-                money_match = re.search(money_pattern, prompt)
-                
-                if money_match:
-                    amount = float(money_match.group(1).replace(',', '.'))
-                    
-                    # Extrair item do contexto
-                    item_keywords = ['pastel', 'hamburguer', 'refrigerante', 'coxinha', 'lanche', 'comida', 'café', 'água']
-                    item_found = None
-                    for keyword in item_keywords:
-                        if keyword in prompt:
-                            item_found = keyword
+
+                # Registrar exercício
+                elif any(x in prompt for x in ["exercício", "treino", "corrida", "caminhada", "musculação", "bike", "natação"]):
+                    tipo = ""
+                    for t in ["corrida", "caminhada", "musculação", "bike", "natação", "exercício", "treino"]:
+                        if t in prompt:
+                            tipo = t
                             break
-                    
-                    if item_found:
-                        pending_expense = {
-                            'amount': amount,
-                            'item': item_found,
-                            'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        }
-                        
-                        response = f"💰 Anotei o gasto de *R$ {amount:.2f}* com _{item_found}_!\n\n"
-                        response += "Para completar o registro, me conta:\n"
-                        response += "- 📍 Onde você estava?\n"
-                        response += "- 👥 Com quem você estava?\n"
-                        response += "- 💳 Como você pagou? (dinheiro, cartão, pix, etc.)"
-                        send(response)
-                        return jsonify({"status": "ok"}), 200
-                    else:
-                        # Item não encontrado, enviar para o Gemini processar
-                        pass
-                
-                # Verificar se é resposta para gasto pendente
-                if pending_expense:
-                    expense = pending_expense
-                    
-                    # Tentar extrair informações da resposta
-                    location = "não informado"
-                    companions = "sozinho"
-                    payment_method = "não informado"
-                    
-                    # Simples extração de informações
-                    if any(word in prompt for word in ['casa', 'trabalho', 'rua', 'shopping', 'escola', 'faculdade', 'cantina', 'lanchonete', 'restaurante']):
-                        location = prompt
-                    if any(word in prompt for word in ['com', 'junto', 'amigo', 'família', 'namorad']):
-                        companions = prompt
-                    if any(word in prompt for word in ['dinheiro', 'cartão', 'pix', 'débito', 'crédito']):
-                        payment_method = prompt
-                    
-                    # Categorizar automaticamente
-                    junk_foods = ['pastel', 'hamburguer', 'refrigerante', 'coxinha', 'salgado']
-                    category = 'lanche' if expense['item'] in junk_foods else 'alimentação'
-                    
-                    # Salvar no sistema
-                    save_success = save_expense(
-                        expense['date'],
-                        expense['amount'],
-                        expense['item'],
-                        location,
-                        companions,
-                        payment_method,
-                        category
-                    )
-                    
-                    # Limpar estado
-                    pending_expense = None
-                    
-                    # Verificar se foi salvo
-                    total_expenses = len(EXPENSES_DATA)
-                    
-                    if save_success:
-                        response = f"✅ *Gasto registrado com sucesso!*\n\n"
-                    else:
-                        response = f"⚠️ *Gasto registrado (temporário):*\n\n"
-                    
-                    response += f"💰 Valor: R$ {expense['amount']:.2f}\n"
-                    response += f"🍽️ Item: {expense['item']}\n"
-                    response += f"📍 Local: {location}\n"
-                    response += f"👥 Companhia: {companions}\n"
-                    response += f"💳 Pagamento: {payment_method}\n"
-                    response += f"📂 Categoria: _{category}_\n"
-                    response += f"📈 Total de gastos: {total_expenses}"
-                    
-                    # Verificar alertas
-                    alerts = check_spending_alerts()
-                    if alerts:
-                        response += f"\n\n⚠️ *Alertas:*\n"
-                        response += "\n".join(alerts[:2])  # Máximo 2 alertas
-                    
-                    send(response)
+                    duracao = ""
+                    match = re.search(r'(\d+\s*(min|hora|h))', prompt)
+                    if match:
+                        duracao = match.group(0)
+                    save_exercise(now, tipo, duracao)
+                    send(f"🏃‍♂️ Exercício registrado: *{tipo}* {duracao}")
                     return jsonify({"status": "ok"}), 200
-                
+
+                # Registrar alimentos disponíveis
+                elif "tenho" in prompt or "em casa" in prompt or "dispensa" in prompt:
+                    alimentos = prompt
+                    save_pantry(now, alimentos)
+                    send(f"🍽️ Alimentos disponíveis registrados!")
+                    return jsonify({"status": "ok"}), 200
+
+                # Comando de resumo
+                elif any(x in prompt for x in ["resumo", "relatório"]):
+                    meals = get_meals()
+                    exercises = get_exercises()
+                    pantry = get_pantry()
+                    ai = model.generate_content([
+                        f"Você é um nutricionista. Gere um resumo alimentar e de exercícios para o usuário, considerando as últimas refeições: {meals}, exercícios: {exercises}, e alimentos disponíveis: {pantry}. Dê dicas personalizadas. Formate para WhatsApp."
+                    ])
+                    send(ai.text)
+                    return jsonify({"status": "ok"}), 200
+
+                # Comando de receita
+                elif "receita" in prompt:
+                    pantry = get_pantry()
+                    ai = model.generate_content([
+                        f"Sugira uma receita saudável e prática usando os ingredientes disponíveis: {pantry}. Formate para WhatsApp."
+                    ])
+                    send(ai.text)
+                    return jsonify({"status": "ok"}), 200
+
+                # Comando de dica
+                elif "dica" in prompt:
+                    meals = get_meals()
+                    exercises = get_exercises()
+                    ai = model.generate_content([
+                        f"Dê uma dica de nutrição ou exercício personalizada para o usuário, considerando refeições: {meals} e exercícios: {exercises}. Formate para WhatsApp."
+                    ])
+                    send(ai.text)
+                    return jsonify({"status": "ok"}), 200
+
                 # Mensagem normal para o bot
-                convo.send_message(prompt)
-                send(convo.last.text)
+                else:
+                    ai = model.generate_content([
+                        f"Você é um nutricionista virtual. O usuário disse: '{prompt}'. Responda de forma útil, motivadora e personalizada. Formate para WhatsApp."
+                    ])
+                    send(ai.text)
+                    return jsonify({"status": "ok"}), 200
             else:
-                # Processar mídia de forma simplificada
-                try:
-                    media_url_endpoint = f'https://graph.facebook.com/v18.0/{data[data["type"]]["id"]}/'
-                    headers = {'Authorization': f'Bearer {wa_token}'}
-                    media_response = requests.get(media_url_endpoint, headers=headers)
-                    media_url = media_response.json()["url"]
-                    media_download_response = requests.get(media_url, headers=headers)
-                    
-                    file_bytes = media_download_response.content
-                    
-                    if data["type"] == "audio":
-                        # Processar áudio
-                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="audio/mpeg")
-                        response = model.generate_content(["Transcreva este áudio para português:", file])
-                        answer = response.text
-                        
-                        # Verificar se menciona gastos
-                        if re.search(r'(?:gastei|comprei|paguei|r\$|reais?)', answer.lower()):
-                            convo.send_message(f"Áudio transcrito: '{answer}' - Usuário mencionou gasto, peça detalhes.")
-                        else:
-                            convo.send_message(f"Áudio transcrito: '{answer}' - Responda como assistente financeiro.")
-                        
-                        send(convo.last.text)
-                        file.delete()
-                        
-                    elif data["type"] == "image":
-                        # Processar imagem
-                        file = genai.upload_file(path=None, file_data=file_bytes, mime_type="image/jpeg")
-                        response = model.generate_content(["Descreva esta imagem, focando em informações financeiras:", file])
-                        answer = response.text
-                        
-                        convo.send_message(f"Imagem analisada: '{answer}' - Responda como assistente financeiro.")
-                        send(convo.last.text)
-                        file.delete()
-                        
-                    else:
-                        send("❌ Formato não suportado. Use texto, áudio ou imagem.")
-                        
-                except Exception as e:
-                    send("❌ Erro ao processar mídia. Tente uma mensagem de texto.")
-                    
-                # Limpeza
-                try:
-                    files = genai.list_files()
-                    for file in files:
-                        file.delete()
-                except:
-                    pass
-        except :pass
-        return jsonify({"status": "ok"}), 200
+                send("❌ Formato não suportado. Use texto.")
+                return jsonify({"status": "ok"}), 200
+        except Exception as e:
+            send(f"❌ Erro: {e}")
+            return jsonify({"status": "error"}), 200
 if __name__ == "__main__":
     app.run(debug=True, port=8000)
