@@ -142,26 +142,26 @@ convo = model.start_chat(history=[
 ])
 
 convo.send_message(f'''
-Você é "{bot_name}", um nutricionista virtual inteligente do {name}, atuando exclusivamente no WhatsApp.
+Você é "{bot_name}", um nutricionista virtual inteligente do {name}. Você opera exclusivamente no WhatsApp e sua missão é ajudar {name} a ter uma alimentação mais saudável, equilibrada e personalizada.
 
-**Seu papel:**
-- Interpretar mensagens do usuário sobre alimentação, exercícios, alimentos disponíveis, dúvidas e histórico.
-- Registrar refeições, sugerir cardápios, receitas e orientar sobre hábitos saudáveis.
-- Sempre considerar o histórico do usuário para respostas e sugestões.
-
-**Como responder:**
+**INSTRUÇÕES IMPORTANTES:**
+- {name} pode enviar mensagens dizendo o que comeu, quanto, se fez ou vai fazer exercício, e o que tem de comida em casa.
 - Sempre responda em português brasileiro, de forma amigável, motivadora e sem julgamentos.
-- Se a mensagem for sobre registro de refeição, exercício ou alimentos, retorne um JSON pronto para salvar no Firebase, com os campos corretos (exemplo: {"tipo": ..., "alimentos": ..., "quantidade": ...}).
-- Se a mensagem for uma pergunta sobre histórico alimentar, refeições do dia, ou dúvidas genéricas como "tem mais algo?", "comi mais alguma coisa?", "fiz mais refeições hoje?", responda mostrando o histórico alimentar do dia, formatado para WhatsApp.
-- Se a mensagem for sobre dicas, receitas ou organização, responda com sugestões personalizadas, considerando o histórico e alimentos disponíveis.
+- Sua função principal é registrar refeições, sugerir cardápios, receitas e orientar sobre hábitos saudáveis.
 
-**Exemplos de perguntas e respostas:**
-- "comi arroz e frango" → retorne o JSON para registro.
-- "foram 100g" → retorne o JSON apenas com quantidade para atualizar.
-- "o que eu comi hoje?", "tem mais algo?", "comi mais alguma coisa?" → responda mostrando o histórico alimentar do dia.
-- "dica", "receita" → responda com sugestões personalizadas.
+**SUAS PRINCIPAIS FUNÇÕES:**
+1. Registrar refeições e exercícios.
+2. Sugerir o que comer nas próximas refeições, considerando histórico, preferências, alimentos disponíveis e rotina de exercícios.
+3. Sugerir receitas saudáveis e práticas com os ingredientes disponíveis.
+4. Dar dicas de nutrição, hidratação, horários ideais para comer e praticar exercícios.
+5. Mostrar resumo alimentar e de exercícios ao pedir "resumo" ou "relatório".
 
-**Formatação para WhatsApp:**
+**COMANDOS ESPECIAIS:**
+- "resumo" ou "relatório" = mostrar resumo alimentar e de exercícios
+- "receita" = sugerir receitas com ingredientes disponíveis
+- "dica" = dar dicas de nutrição ou exercício
+
+**FORMATAÇÃO WHATSAPP:**
 - Use *negrito* para alimentos, horários e dicas importantes
 - Use _itálico_ para tipos de refeição ou exercício
 - Use listas com - para organizar informações
@@ -214,23 +214,6 @@ def webhook():
                 now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
                 # ...existing code for command handling...
-                # Detecta complemento de quantidade (ex: 'foram 100g', 'era 2 fatias', 'corrigi para 200ml')
-                complemento_match = re.search(r'(\d+\s*(g|ml|un|fatias|porções))', prompt)
-                if complemento_match and not any(x in prompt for x in ["comi", "almocei", "jantei", "lanche", "café da manhã", "ceia"]):
-                    quantidade = complemento_match.group(0)
-                    # Atualiza a última refeição registrada
-                    ref = db.reference('meals')
-                    meals = ref.order_by_child('data').limit_to_last(1).get()
-                    if meals:
-                        key = list(meals.keys())[0]
-                        meal = meals[key]
-                        ref.child(key).update({'quantidade': quantidade})
-                        send(f"✏️ Quantidade atualizada para *{quantidade}* na última refeição: {meal.get('alimentos','')}.")
-                        return jsonify({"status": "ok"}), 200
-                    else:
-                        send("❌ Nenhuma refeição registrada para atualizar.")
-                        return jsonify({"status": "error"}), 200
-                # ...registro normal de refeição...
                 if any(x in prompt for x in ["comi", "almocei", "jantei", "lanche", "café da manhã", "ceia"]):
                     # Não registra se for pergunta
                     if "?" in prompt or prompt.startswith("o que") or prompt.startswith("qual") or prompt.startswith("quando"):
